@@ -11,3 +11,13 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     </DialogProvider>
   </React.StrictMode>
 );
+
+// Register PWA Service Worker for standalone macOS App installability
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/sw.js')
+      .then((reg) => console.log('EasyMD PWA ServiceWorker registered:', reg.scope))
+      .catch((err) => console.warn('EasyMD ServiceWorker registration failed:', err));
+  });
+}

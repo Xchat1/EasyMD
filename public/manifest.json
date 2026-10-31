@@ -1,0 +1,30 @@
+{
+  "name": "EasyMD - 极简 Markdown / H5 / TXT 编辑器",
+  "short_name": "EasyMD",
+  "start_url": "/",
+  "id": "/",
+  "display": "standalone",
+  "background_color": "#f6f6f7",
+  "theme_color": "#202022",
+  "description": "专为 macOS 打造的轻量级 Markdown / H5 / TXT 编辑与实时预览工作台，支持 iCloud 云盘目录同步。",
+  "orientation": "any",
+  "categories": [
+    "productivity",
+    "utilities",
+    "editor"
+  ],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

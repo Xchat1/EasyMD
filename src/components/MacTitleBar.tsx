@@ -18,6 +18,7 @@ import {
   Printer,
   Sparkles,
   Cloud,
+  AppWindow,
 } from 'lucide-react';
 import { DocMode, ViewLayout, ThemeMode } from '../types';
 import { useDialog } from '../context/DialogContext';
@@ -72,6 +73,55 @@ export const MacTitleBar: React.FC<MacTitleBarProps> = ({
   const { confirm, toast } = useDialog();
   const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // PWA install state
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isInstalled, setIsInstalled] = useState<boolean>(() => {
+    return (
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as any).standalone === true
+    );
+  });
+
+  useEffect(() => {
+    const handleBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    const handleAppInstalled = () => {
+      setIsInstalled(true);
+      setDeferredPrompt(null);
+      toast.success('EasyMD 已成功安装为 Mac 独立应用！可在启动台或程序坞中找到。');
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+    window.addEventListener('appinstalled', handleAppInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      if (choice.outcome === 'accepted') {
+        toast.success('正在安装 EasyMD 到您的 Mac...');
+      }
+      setDeferredPrompt(null);
+    } else {
+      await confirm({
+        title: '将 EasyMD 安装为 Mac 独立应用',
+        message:
+          '安装后，EasyMD 将以极简的原生 macOS 独立窗口常驻在您的「程序坞 (Dock)」与「启动台」中：\n\n1. Chrome / Edge 浏览器：\n   点击地址栏最右侧的 ⊕ 图标（「安装 EasyMD」），或在右上角菜单中选择「将网页作为应用安装」；\n\n2. Safari 浏览器 (macOS 14 及以上)：\n   点击顶部菜单栏【文件】➔【添加到程序坞】；\n\n安装完成后无需保留浏览器标签页，直接从 Dock 双击打开即可！',
+        confirmText: '我知道了',
+        cancelText: '关闭',
+        icon: 'folder',
+      });
+    }
+  };
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -210,7 +260,18 @@ export const MacTitleBar: React.FC<MacTitleBarProps> = ({
       </div>
 
       {/* Right: Layout Switchers & Actions */}
-      <div className="flex items-center space-x-1.5 w-68 justify-end flex-shrink-0">
+      <div className="flex items-center space-x-1.5 justify-end flex-shrink-0">
+        {/* Install as Mac Standalone App */}
+        {!isInstalled && (
+          <button
+            onClick={handleInstallClick}
+            className="flex items-center space-x-1 px-2 py-1 rounded-lg text-xs font-medium bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 transition-colors mr-0.5"
+            title="将 EasyMD 安装为 macOS 独立桌面 App (开机即用，常驻程序坞与启动台)"
+          >
+            <AppWindow size={13} />
+            <span className="hidden md:inline">安装到 Mac</span>
+          </button>
+        )}
         {/* Layout Toggle (Only meaningful for MD and H5) */}
         {mode !== 'txt' && (
           <div className="flex bg-black/[0.06] dark:bg-white/[0.08] p-0.5 rounded-lg mr-1 border border-black/[0.04] dark:border-white/[0.05]">
