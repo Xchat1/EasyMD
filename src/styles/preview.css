@@ -1,0 +1,293 @@
+/* Markdown Preview Styling with Apple & GitHub Design System */
+
+.easymd-preview {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.7;
+  word-wrap: break-word;
+  color: #1f2328;
+}
+
+.dark .easymd-preview {
+  color: #e6edf3;
+}
+
+/* Headings */
+.easymd-preview h1,
+.easymd-preview h2,
+.easymd-preview h3,
+.easymd-preview h4,
+.easymd-preview h5,
+.easymd-preview h6 {
+  font-weight: 600;
+  line-height: 1.35;
+  margin-top: 1.6em;
+  margin-bottom: 0.6em;
+  color: #111827;
+  scroll-margin-top: 2rem;
+}
+
+.dark .easymd-preview h1,
+.dark .easymd-preview h2,
+.dark .easymd-preview h3,
+.dark .easymd-preview h4,
+.dark .easymd-preview h5,
+.dark .easymd-preview h6 {
+  color: #f0f6fc;
+}
+
+.easymd-preview h1 {
+  font-size: 2.15em;
+  font-weight: 700;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+.dark .easymd-preview h1 {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.easymd-preview h2 {
+  font-size: 1.6em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+.dark .easymd-preview h2 {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.easymd-preview h3 { font-size: 1.3em; }
+.easymd-preview h4 { font-size: 1.1em; }
+.easymd-preview h5 { font-size: 0.95em; }
+.easymd-preview h6 { font-size: 0.85em; color: #6e7781; }
+
+/* Paragraphs & Text */
+.easymd-preview p {
+  margin-top: 0;
+  margin-bottom: 1.1em;
+}
+
+.easymd-preview a {
+  color: #0071e3;
+  text-decoration: none;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+.dark .easymd-preview a {
+  color: #2997ff;
+}
+.easymd-preview a:hover {
+  text-decoration: underline;
+}
+
+.easymd-preview strong {
+  font-weight: 650;
+  color: #000;
+}
+.dark .easymd-preview strong {
+  color: #fff;
+}
+
+/* Blockquotes */
+.easymd-preview blockquote {
+  margin: 1.4em 0;
+  padding: 0.75em 1.25em;
+  border-left: 4px solid #0071e3;
+  background: rgba(0, 113, 227, 0.04);
+  border-radius: 0 10px 10px 0;
+  color: #4b5563;
+}
+.dark .easymd-preview blockquote {
+  border-left-color: #0a84ff;
+  background: rgba(10, 132, 255, 0.08);
+  color: #9ca3af;
+}
+
+/* Lists */
+.easymd-preview ul,
+.easymd-preview ol {
+  padding-left: 2em;
+  margin-top: 0;
+  margin-bottom: 1.1em;
+}
+
+.easymd-preview ul {
+  list-style-type: disc;
+}
+.easymd-preview ol {
+  list-style-type: decimal;
+}
+
+.easymd-preview li {
+  margin-top: 0.35em;
+  margin-bottom: 0.35em;
+}
+
+/* Task lists */
+.easymd-preview ul li input[type="checkbox"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1.5px solid #94a3b8;
+  vertical-align: -2px;
+  margin-right: 8px;
+  position: relative;
+  cursor: default;
+}
+.easymd-preview ul li input[type="checkbox"]:checked {
+  background-color: #0071e3;
+  border-color: #0071e3;
+}
+.easymd-preview ul li input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  width: 5px;
+  height: 9px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* Inline Code */
+.easymd-preview code:not([class*="language-"]) {
+  padding: 0.2em 0.45em;
+  font-size: 86%;
+  background-color: rgba(175, 184, 193, 0.2);
+  color: #eb5757;
+  border-radius: 6px;
+  font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
+}
+.dark .easymd-preview code:not([class*="language-"]) {
+  background-color: rgba(110, 118, 129, 0.3);
+  color: #ff7b72;
+}
+
+/* Code Blocks */
+.easymd-preview pre {
+  margin: 1.4em 0;
+  padding: 1.1em 1.25em;
+  background-color: #f6f8fa;
+  border-radius: 12px;
+  overflow-x: auto;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  font-size: 89%;
+  line-height: 1.55;
+}
+.dark .easymd-preview pre {
+  background-color: #1e1e24;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.easymd-preview pre code {
+  font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
+  background: transparent !important;
+  padding: 0 !important;
+  font-size: 1em !important;
+}
+
+/* Tables */
+.easymd-preview table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 1.4em 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+.dark .easymd-preview table {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.easymd-preview th,
+.easymd-preview td {
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  text-align: left;
+}
+.dark .easymd-preview th,
+.dark .easymd-preview td {
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+  border-right-color: rgba(255, 255, 255, 0.06);
+}
+.easymd-preview th:last-child,
+.easymd-preview td:last-child {
+  border-right: none;
+}
+.easymd-preview tr:last-child td {
+  border-bottom: none;
+}
+
+.easymd-preview th {
+  background-color: rgba(0, 0, 0, 0.03);
+  font-weight: 650;
+  color: #111827;
+}
+.dark .easymd-preview th {
+  background-color: rgba(255, 255, 255, 0.04);
+  color: #f3f4f6;
+}
+
+.easymd-preview tr:nth-child(even) td {
+  background-color: rgba(0, 0, 0, 0.015);
+}
+.dark .easymd-preview tr:nth-child(even) td {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+/* Horizontal Rule */
+.easymd-preview hr {
+  height: 1px;
+  background-color: rgba(0, 0, 0, 0.08);
+  border: none;
+  margin: 2.2em 0;
+}
+.dark .easymd-preview hr {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Images */
+.easymd-preview img {
+  max-width: 100%;
+  border-radius: 10px;
+  margin: 1.2em auto;
+  display: block;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+
+/* KaTeX custom sizing */
+.katex-display {
+  margin: 0.5em 0 !important;
+}
+
+/* Hide scrollbar for clean mac look */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Mac subtle scrollbar */
+.mac-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.mac-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.mac-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 10px;
+}
+.dark .mac-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+}
+.mac-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.32);
+}
+.dark .mac-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}

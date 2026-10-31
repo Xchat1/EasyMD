@@ -1,0 +1,66 @@
+@import 'katex/dist/katex.min.css';
+@import 'highlight.js/styles/github.css';
+@import './styles/preview.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* macOS System font smoothing and UI polish */
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+}
+
+/* Allow text selection inside editor and preview panes */
+.easymd-preview,
+.cm-content,
+pre,
+code {
+  user-select: text;
+}
+
+/* macOS sheet dialog & toast animations */
+@keyframes macModalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-macModalIn {
+  animation: macModalIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Print styles for export to PDF */
+@media print {
+  header,
+  footer,
+  aside,
+  .code-copy-btn,
+  #work-container > div:first-child,
+  .cm-editor {
+    display: none !important;
+  }
+
+  body,
+  #root,
+  main,
+  #work-container {
+    background: #ffffff !important;
+    color: #000000 !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .easymd-preview {
+    max-width: 100% !important;
+    padding: 0 !important;
+  }
+}
