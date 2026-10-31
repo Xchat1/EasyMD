@@ -2,10 +2,10 @@ import { DocMode } from '../types';
 
 export const TEMPLATES: Record<DocMode, { title: string; content: string }> = {
   md: {
-    title: 'EasyMD 欢迎指南.md',
-    content: `# 🚀 欢迎使用 EasyMD - 专为 macOS 打造的极简工作台
+    title: '欢迎使用.md',
+    content: `# EasyMD 快速指南
 
-> **EasyMD** 是一款轻量、现代、优雅的在线多模式文档编辑与实时预览工具，全面适配 macOS 设计语言，专为日常办公、快速笔记、H5 原型与技术撰写打造。
+> **EasyMD** 是一款轻量、现代、优雅的在线多模式文档编辑与实时预览工具，全面适配 macOS 设计语言，专为日常办公打造。
 
 ---
 
@@ -112,7 +112,7 @@ export function initializeEasyMD(doc: DocumentOptions) {
   },
 
   h5: {
-    title: '移动端公告卡片.html',
+    title: '移动端原型.html',
     content: `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -267,7 +267,7 @@ export function initializeEasyMD(doc: DocumentOptions) {
   },
 
   txt: {
-    title: '每日备忘笔记.txt',
+    title: '工作备忘.txt',
     content: `【EasyMD 纯文本工作记事簿】
 创建日期: 2026-10-31
 环境: macOS Workstation

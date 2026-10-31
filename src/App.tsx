@@ -117,6 +117,15 @@ export function App() {
     return documents.find((d) => d.id === currentDocId) || documents[0];
   }, [documents, currentDocId]);
 
+  // Sync concise window title
+  useEffect(() => {
+    if (currentDoc?.title) {
+      document.title = `${currentDoc.title} · EasyMD`;
+    } else {
+      document.title = 'EasyMD';
+    }
+  }, [currentDoc?.title]);
+
   // Layout & Theme State
   const [layout, setLayout] = useState<ViewLayout>('split');
   const [theme, setTheme] = useState<ThemeMode>(() => {

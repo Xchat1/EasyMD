@@ -113,7 +113,7 @@ export const MacTitleBar: React.FC<MacTitleBarProps> = ({
       setDeferredPrompt(null);
     } else {
       await confirm({
-        title: '将 EasyMD 安装为 Mac 独立应用',
+        title: '安装 EasyMD',
         message:
           '安装后，EasyMD 将以极简的原生 macOS 独立窗口常驻在您的「程序坞 (Dock)」与「启动台」中：\n\n1. Chrome / Edge 浏览器：\n   点击地址栏最右侧的 ⊕ 图标（「安装 EasyMD」），或在右上角菜单中选择「将网页作为应用安装」；\n\n2. Safari 浏览器 (macOS 14 及以上)：\n   点击顶部菜单栏【文件】➔【添加到程序坞】；\n\n安装完成后无需保留浏览器标签页，直接从 Dock 双击打开即可！',
         confirmText: '我知道了',
@@ -242,7 +242,7 @@ export const MacTitleBar: React.FC<MacTitleBarProps> = ({
         </div>
 
         {/* Editable Title */}
-        <div className="relative flex items-center group max-w-[200px]">
+        <div className="relative flex items-center group max-w-[240px]">
           <input
             type="text"
             value={title}
