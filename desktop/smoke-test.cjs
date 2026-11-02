@@ -19,7 +19,7 @@ exports.runSmokeTest = async ({ window, workspace, appDirectory }) => {
   const contents = window.webContents;
   const coldOpen = process.argv.includes('--smoke-expect-open');
   const initialFile = coldOpen ? 'Finder冷启动.md' : 'Smoke.md';
-  await until(() => contents.executeJavaScript(`document.title.includes(${JSON.stringify(initialFile)}) && !!document.querySelector('.cm-content') && document.body.innerText.includes('已自动保存')`), 'initial local document or queued Finder request', 90000);
+  await until(() => contents.executeJavaScript(`document.title.includes(${JSON.stringify(initialFile)}) && document.querySelector('.cm-content')?.getAttribute('contenteditable') === 'true' && document.body.innerText.includes('已自动保存')`), 'editable initial local document or queued Finder request', 90000);
   const runtime = await contents.executeJavaScript(`({ node:typeof require, process:typeof process, bridge:Object.keys(window.easymdDesktop||{}), body:document.body.innerText })`);
   assert.equal(runtime.node, 'undefined');
   assert.equal(runtime.process, 'undefined');
@@ -29,6 +29,7 @@ exports.runSmokeTest = async ({ window, workspace, appDirectory }) => {
   assert.equal(await contents.executeJavaScript(`navigator.permissions.query({name:'clipboard-write'}).then(permission=>permission.state)`), 'granted');
   await contents.executeJavaScript(`document.querySelector('.cm-content').focus()`);
   await contents.insertText('Native app save smoke marker.\n');
+  assert(await contents.executeJavaScript(`document.querySelector('.cm-content')?.innerText.includes('Native app save smoke marker.')`), 'Initial test input did not enter the editable document');
   await until(async () => (await fs.readFile(path.join(workspace.root, initialFile), 'utf8')).includes('Native app save smoke marker.'), 'automatic document save');
 
   const externalDirectory = path.join(path.dirname(workspace.root), 'External test files');
@@ -36,10 +37,24 @@ exports.runSmokeTest = async ({ window, workspace, appDirectory }) => {
   const finderFile = path.join(externalDirectory, '访达已存在的文稿.md');
   const original = '# Existing Markdown\n\n中文路径和已有文件。\n';
   await fs.writeFile(finderFile, original);
+  // Slow the tree refresh deliberately: the document title appears before the
+  // editor becomes editable. The test must wait for the actual editing state.
+  await contents.executeJavaScript(`(() => {
+    window.__easymdSmokeFetch = window.fetch;
+    window.fetch = async function (...args) {
+      const response = await window.__easymdSmokeFetch.apply(this, args);
+      if (typeof args[1]?.body === 'string' && JSON.parse(args[1].body).operation === 'list') {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      return response;
+    };
+  })()`);
   app.emit('open-file', { preventDefault() {} }, finderFile);
-  await until(() => contents.executeJavaScript(`document.title.includes('访达已存在的文稿.md') && document.querySelector('.cm-content')?.innerText.includes('中文路径和已有文件')`), 'Finder opens an existing Markdown file');
+  await until(() => contents.executeJavaScript(`document.title.includes('访达已存在的文稿.md') && document.querySelector('.cm-content')?.innerText.includes('中文路径和已有文件') && document.querySelector('.cm-content')?.getAttribute('contenteditable') === 'true'`), 'Finder opens an editable existing Markdown file');
+  await contents.executeJavaScript(`window.fetch = window.__easymdSmokeFetch; delete window.__easymdSmokeFetch;`);
   await contents.executeJavaScript(`document.querySelector('.cm-content').focus()`);
   await contents.insertText('Edited imported copy.\n');
+  assert(await contents.executeJavaScript(`document.querySelector('.cm-content')?.innerText.includes('Edited imported copy.')`), 'Finder test input did not enter the editable imported document');
   await until(async () => (await fs.readFile(path.join(workspace.root, '访达已存在的文稿.md'), 'utf8')).includes('Edited imported copy.'), 'imported copy autosave');
   assert.equal(await fs.readFile(finderFile, 'utf8'), original, 'Opening an external file must preserve its source');
   const pickerFile = path.join(externalDirectory, '选择器已有文稿.md');
