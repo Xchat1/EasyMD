@@ -19,8 +19,8 @@
 
 | Mac 类型 | DMG 安装包 |
 | :--- | :--- |
-| Apple 芯片 | [EasyMD 1.0.0 · arm64](https://github.com/Xchat1/EasyMD/releases/download/v1.0.0/EasyMD-1.0.0-mac-arm64.dmg) |
-| Intel 处理器 | [EasyMD 1.0.0 · x64](https://github.com/Xchat1/EasyMD/releases/download/v1.0.0/EasyMD-1.0.0-mac-x64.dmg) |
+| Apple 芯片 | [EasyMD 1.0.1 · arm64](https://github.com/Xchat1/EasyMD/releases/download/v1.0.1/EasyMD-1.0.1-mac-arm64.dmg) |
+| Intel 处理器 | [EasyMD 1.0.1 · x64](https://github.com/Xchat1/EasyMD/releases/download/v1.0.1/EasyMD-1.0.1-mac-x64.dmg) |
 
 打开 DMG，将 **EasyMD 拖入“应用程序”**，再启动应用。**无需安装 Node.js、pnpm 或 Chrome**。也提供 ZIP、SHA-256 校验值和构建信息。
 
@@ -121,9 +121,9 @@ BASE_URL=/EasyMD/ pnpm build
 
 ## 开源与许可证
 
-EasyMD 原创代码和项目自绘图标以 [MIT 许可证](./LICENSE) 发布，版权署名为 `Copyright (c) 2026 Xchat1`。生产构建携带 `LICENSE.txt` 并纳入离线缓存，macOS 安装包同样保留该文件。
+EasyMD 原创代码以 [MIT 许可证](./LICENSE) 发布，版权署名为 `Copyright (c) 2026 Xchat1`。生产构建携带 `LICENSE.txt` 并纳入离线缓存，macOS 安装包同样保留该文件。
 
-应用图标采用项目内全新绘制的几何矢量源 [assets/app-icon.svg](./assets/app-icon.svg)，已替换来源无法核实的旧位图。设计来源、衍生文件与重新生成方法见 [素材来源记录](./assets/ASSET_SOURCES.md)。MIT 授权不改变第三方组件、字体或用户自行导入素材的许可证。
+应用图标沿用原有的蓝色立体 **Md** 图标，原始高清源保存在 [assets/app-icon-source.png](./assets/app-icon-source.png)。v1.0.1 修正了首版安装包误用其他图标的问题，应用与 PWA 使用同一原图导出。来源、衍生文件与重新生成方法见 [素材来源记录](./assets/ASSET_SOURCES.md)。MIT 授权不改变第三方组件、字体或用户自行导入素材的许可证。
 
 第三方组件保留各自许可证。完整声明见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)，构建时也复制到 `dist/`。清单覆盖锁文件对应的已安装运行时依赖、传递依赖与 peer 依赖；缺失完整许可或版本未核验时构建失败。KaTeX 软件使用 MIT，字体另受 SIL OFL 1.1 约束；HTML 导出保留对应字体和样式声明。
 

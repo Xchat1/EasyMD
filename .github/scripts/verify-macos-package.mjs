@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { access, readFile, readdir, writeFile } from 'node:fs/promises';
+import { access, lstat, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { getCurrentFuseWire, FuseV1Options, FuseState } from '@electron/fuses';
 
@@ -26,7 +26,13 @@ for (const file of ['LICENSE.electron.txt', 'LICENSES.chromium.html', 'licenses/
 assert.equal(await readFile(path.join(appFiles, 'LICENSE'), 'utf8'), await readFile('LICENSE', 'utf8'));
 assert.equal(await readFile(path.join(appFiles, 'dist/LICENSE.txt'), 'utf8'), await readFile('LICENSE', 'utf8'));
 
-const plist = file => execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Print :LSMinimumSystemVersion', file], { encoding: 'utf8' }).trim();
+const plist = (file, key = 'LSMinimumSystemVersion') => execFileSync('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, file], { encoding: 'utf8' }).trim();
+const declaredIcon = plist(path.join(app, 'Contents/Info.plist'), 'CFBundleIconFile');
+assert(declaredIcon && path.basename(declaredIcon) === declaredIcon && !declaredIcon.includes('\\'), 'CFBundleIconFile must name an icon directly in Resources');
+const iconFile = declaredIcon.endsWith('.icns') ? declaredIcon : `${declaredIcon}.icns`;
+assert((await lstat(path.join(resources, iconFile))).isFile(), 'The application icon must be a real file in Resources, not a symlink');
+const sourceIcon = await readFile(path.join(project, 'assets/app-icon.icns'));
+assert((await readFile(path.join(resources, iconFile))).equals(sourceIcon), 'The published application icon must match assets/app-icon.icns byte for byte');
 const minimumSystemVersion = plist(path.join(app, 'Contents/Info.plist'));
 const electronMinimumSystemVersion = plist(path.join(project, 'node_modules/electron/dist/Electron.app/Contents/Info.plist'));
 assert.equal(minimumSystemVersion, electronMinimumSystemVersion, 'The package must preserve the Electron runtime minimum macOS version');
@@ -48,10 +54,11 @@ const buildInfo = {
   signing: 'ad-hoc; no Developer ID signature',
   notarized: false,
   automaticUpdates: false,
+  icon: { file: iconFile, sha256: createHash('sha256').update(sourceIcon).digest('hex') },
 };
 const infoName = `build-info-${arch}.json`;
 await writeFile(path.join('release', infoName), `${JSON.stringify(buildInfo, null, 2)}\n`);
 const names = [`EasyMD-${manifest.version}-mac-${arch}.dmg`, `EasyMD-${manifest.version}-mac-${arch}.zip`, infoName];
 const sums = await Promise.all(names.map(async name => `${createHash('sha256').update(await readFile(path.join('release', name))).digest('hex')}  ${name}`));
 await writeFile(path.join('release', `SHA256SUMS-${arch}.txt`), `${sums.join('\n')}\n`);
-console.log(`Verified ${arch} preview package; minimum macOS ${minimumSystemVersion}; project/Electron/Chromium notices present.`);
+console.log(`Verified ${arch} preview package; minimum macOS ${minimumSystemVersion}; project/Electron/Chromium notices present; application icon matches the source ICNS.`);

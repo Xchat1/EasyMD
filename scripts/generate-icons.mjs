@@ -1,33 +1,21 @@
-import { access, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
-// Prerequisites: Node.js, macOS sips/iconutil, and Chrome or Chromium.
-// Override the browser location with EASYMD_CHROME_BIN. No npm packages or
-// network resources are used to render the authoritative SVG source.
+// Preserve the established Md bitmap. Icon export only resizes this source;
+// it never redraws, substitutes or downloads artwork.
 if (process.platform !== 'darwin') throw new Error('Icon export requires macOS sips and iconutil.');
 const project = fileURLToPath(new URL('../', import.meta.url));
-const chrome = process.env.EASYMD_CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-await access(chrome);
-const source = await readFile(path.join(project, 'assets/app-icon.svg'), 'utf8');
-if (/<(?:image|script|foreignObject)\b|(?:href|src)\s*=|@import|https?:\/\//i.test(source.replace('http://www.w3.org/2000/svg', ''))) {
-  throw new Error('The icon source must remain a self-contained vector without scripts, images or external resources.');
-}
+const source = path.join(project, 'assets/app-icon-source.png');
+const sourceHash = createHash('sha256').update(await readFile(source)).digest('hex');
+if (sourceHash !== '1dcb2c93b5d0879ac001bd9bc82edf47ba79fa4a0f728dab8056d1d3329f7518') throw new Error('The original Md icon source was replaced. Review branding before regenerating icons.');
 const temporary = await mkdtemp(path.join(tmpdir(), 'easymd-icons-'));
 try {
-  const html = path.join(temporary, 'icon.html');
   const master = path.join(temporary, 'icon-1024.png');
-  await writeFile(html, `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>html,body{margin:0;width:1024px;height:1024px;background:transparent;overflow:hidden}svg{display:block;width:1024px;height:1024px}</style></head><body>${source}</body></html>`);
-  execFileSync(chrome, [
-    '--headless', '--no-first-run', '--no-default-browser-check',
-    '--disable-background-networking', '--disable-component-update', '--disable-sync',
-    '--disable-gpu', '--hide-scrollbars', '--force-device-scale-factor=1',
-    '--default-background-color=00000000', '--window-size=1024,1024',
-    `--user-data-dir=${path.join(temporary, 'chrome-profile')}`,
-    `--screenshot=${master}`, pathToFileURL(html).href,
-  ], { stdio: 'pipe', timeout: 60000 });
+  execFileSync('/usr/bin/sips', ['-z', '1024', '1024', source, '--out', master], { stdio: 'pipe' });
 
   const outputs = {
     'assets/app-icon.png': 1024,
@@ -56,7 +44,7 @@ try {
     execFileSync('/usr/bin/sips', ['-z', String(size), String(size), master, '--out', destination], { stdio: 'pipe' });
   }
   execFileSync('/usr/bin/iconutil', ['-c', 'icns', iconset, '-o', path.join(project, 'assets/app-icon.icns')], { stdio: 'pipe' });
-  console.log('Exported EasyMD PNG icons and macOS ICNS from assets/app-icon.svg.');
+  console.log('Exported PNG icons and macOS ICNS from the original Md source.');
 } finally {
   await rm(temporary, { recursive: true, force: true });
 }
