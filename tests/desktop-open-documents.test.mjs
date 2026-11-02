@@ -18,6 +18,24 @@ async function fixture(t) {
 
 const message = fileName => ({ fileName, content: `Content of ${fileName}` });
 
+// Observe real descriptor reads; mutations still go through the actual file
+// system. Tests using this process-wide prototype hook run serially and always
+// restore it, including assertion/IO failures.
+async function withFileReads(filename, hooks, operation) {
+  const probe = await fs.open(filename, 'r');
+  const prototype = Object.getPrototypeOf(probe);
+  await probe.close();
+  const originalRead = prototype.read;
+  prototype.read = async function(...args) {
+    await hooks.before?.(args);
+    const result = await originalRead.apply(this, args);
+    await hooks.after?.(result, args);
+    return result;
+  };
+  try { return await operation(); }
+  finally { prototype.read = originalRead; }
+}
+
 test('native selection reads supported text documents without writing or disclosing the external path', async t => {
   const { directory, root } = await fixture(t);
   for (const extension of DOCUMENT_EXTENSIONS) {
@@ -82,7 +100,7 @@ test('unsafe selections reject relative paths, unsupported formats, folders, sym
   await assert.rejects(readSelectedDocument(path.join(directory, 'missing.md'), root), error => error.code === 'NOT_FOUND' && !error.message.includes(directory));
 });
 
-test('oversized files are rejected before reading and decoded UTF-8 content is bounded independently', async t => {
+test('oversized files are rejected before reading and decoded UTF-8 content is bounded independently', { concurrency: false }, async t => {
   const { directory, root } = await fixture(t);
   const oversized = path.join(directory, 'large.md');
   await fs.writeFile(oversized, '');
@@ -102,7 +120,7 @@ test('oversized files are rejected before reading and decoded UTF-8 content is b
   await assert.rejects(readSelectedDocument(decoded, root), { code: 'TOO_LARGE' });
 });
 
-test('a selected pathname replaced during reading cannot be mistaken for the originally opened file', async t => {
+test('a selected pathname replaced during reading cannot be mistaken for the originally opened file', { concurrency: false }, async t => {
   const { directory, root } = await fixture(t);
   const filename = path.join(directory, 'changing.md');
   await fs.writeFile(filename, 'original selected content');
@@ -124,6 +142,171 @@ test('a selected pathname replaced during reading cannot be mistaken for the ori
   finally { prototype.read = originalRead; }
   assert.equal(await fs.readFile(filename, 'utf8'), 'a replacement at the original path');
   assert.equal(await fs.readFile(path.join(directory, 'moved.md'), 'utf8'), 'original selected content');
+});
+
+test('permission-only metadata changes between selection and open do not reject unchanged content', { concurrency: false }, async t => {
+  const { directory, root } = await fixture(t);
+  const filename = path.join(directory, '访问权限变化.md');
+  const content = '# 文稿内容没有变化\n';
+  await fs.writeFile(filename, content, { mode: 0o600 });
+  const originalLstat = fs.lstat;
+  let selected, changed;
+  fs.lstat = async function(candidate, ...args) {
+    const result = await originalLstat.call(this, candidate, ...args);
+    if (candidate === filename && !selected) {
+      selected = result;
+      await fs.chmod(filename, 0o640);
+      changed = await originalLstat(filename);
+    }
+    return result;
+  };
+  try {
+    assert.deepEqual(await readSelectedDocument(filename, root), { fileName: path.basename(filename), content });
+  } finally { fs.lstat = originalLstat; }
+  assert.equal(changed.dev, selected.dev);
+  assert.equal(changed.ino, selected.ino);
+  assert.notEqual(changed.mode, selected.mode, 'the test must really change metadata before the descriptor opens');
+  assert.equal(await fs.readFile(filename, 'utf8'), content);
+});
+
+test('timestamp-only changes after reading do not reject unchanged bytes', { concurrency: false }, async t => {
+  const { directory, root } = await fixture(t);
+  const filename = path.join(directory, '元数据更新.md');
+  const content = '# 中文内容与 UTF-8 ✨\n';
+  const originalTime = new Date('2020-01-01T00:00:00.000Z');
+  const updatedTime = new Date('2021-01-01T00:00:00.000Z');
+  await fs.writeFile(filename, content);
+  await fs.utimes(filename, originalTime, originalTime);
+  let changed = false;
+  await withFileReads(filename, { after: async result => {
+    if (!changed && result.bytesRead > 0) {
+      changed = true;
+      await fs.utimes(filename, updatedTime, updatedTime);
+    }
+  } }, async () => {
+    assert.deepEqual(await readSelectedDocument(filename, root), { fileName: path.basename(filename), content });
+  });
+  assert(changed);
+  assert.equal((await fs.stat(filename)).mtimeMs, updatedTime.getTime());
+  assert.equal(await fs.readFile(filename, 'utf8'), content);
+});
+
+test('same-size in-place content changes are rejected even when the modification time is restored', { concurrency: false }, async t => {
+  const { directory, root } = await fixture(t);
+  const filename = path.join(directory, 'same-size.md');
+  const original = '# Before\n';
+  const replacement = '# After!\n';
+  assert.equal(Buffer.byteLength(original), Buffer.byteLength(replacement));
+  const fixedTime = new Date('2020-01-01T00:00:00.000Z');
+  await fs.writeFile(filename, original);
+  await fs.utimes(filename, fixedTime, fixedTime);
+  const before = await fs.stat(filename);
+  let changed = false;
+  await withFileReads(filename, { after: async result => {
+    if (!changed && result.bytesRead === 0) {
+      changed = true;
+      const writer = await fs.open(filename, 'r+');
+      try { await writer.write(replacement, 0, 'utf8'); }
+      finally { await writer.close(); }
+      await fs.utimes(filename, fixedTime, fixedTime);
+    }
+  } }, async () => {
+    await assert.rejects(readSelectedDocument(filename, root), { code: 'FILE_CHANGED' });
+  });
+  assert(changed, 'the first bounded snapshot must have completed before the rewrite');
+  const after = await fs.stat(filename);
+  assert.equal(after.dev, before.dev);
+  assert.equal(after.ino, before.ino, 'the write must change the original inode, not replace it');
+  assert.equal(after.size, before.size);
+  assert.equal(after.mtimeMs, before.mtimeMs);
+  assert.equal(await fs.readFile(filename, 'utf8'), replacement);
+});
+
+test('a replacement inode is rejected even when its document bytes are identical', { concurrency: false }, async t => {
+  const { directory, root } = await fixture(t);
+  const filename = path.join(directory, 'same-content.md');
+  const moved = path.join(directory, 'selected-original.md');
+  const content = '# Identical content\n';
+  await fs.writeFile(filename, content);
+  const before = await fs.stat(filename);
+  let changed = false;
+  await withFileReads(filename, { after: async result => {
+    if (!changed && result.bytesRead === 0) {
+      changed = true;
+      await fs.rename(filename, moved);
+      await fs.writeFile(filename, content, { flag: 'wx' });
+    }
+  } }, async () => {
+    await assert.rejects(readSelectedDocument(filename, root), { code: 'FILE_CHANGED' });
+  });
+  assert(changed);
+  assert.notEqual((await fs.stat(filename)).ino, before.ino);
+  assert.equal(await fs.readFile(filename, 'utf8'), content);
+  assert.equal(await fs.readFile(moved, 'utf8'), content);
+});
+
+test('growth or truncation after the first snapshot cannot silently change the imported document', { concurrency: false }, async t => {
+  const { directory, root } = await fixture(t);
+  for (const operation of ['grow', 'truncate']) {
+    const filename = path.join(directory, `${operation}.md`);
+    const content = '# Original bounded snapshot\n';
+    await fs.writeFile(filename, content);
+    let changed = false;
+    await withFileReads(filename, { after: async result => {
+      if (!changed && result.bytesRead === 0) {
+        changed = true;
+        if (operation === 'grow') await fs.appendFile(filename, 'Additional content\n');
+        else await fs.truncate(filename, 5);
+      }
+    } }, async () => {
+      await assert.rejects(readSelectedDocument(filename, root), { code: 'FILE_CHANGED' }, operation);
+    });
+    assert(changed, operation);
+    assert.notEqual((await fs.stat(filename)).size, Buffer.byteLength(content), operation);
+  }
+});
+
+test('each bounded snapshot rejects a file that grows beyond the limit after its preceding stat', { concurrency: false }, async t => {
+  const { directory, root } = await fixture(t);
+  for (const snapshot of [1, 2]) {
+    const filename = path.join(directory, `growing-snapshot-${snapshot}.md`);
+    await fs.writeFile(filename, '# Small\n');
+    let starts = 0, expanded = false;
+    await withFileReads(filename, { before: async args => {
+      if (args[3] === 0 && ++starts === snapshot) {
+        expanded = true;
+        await fs.truncate(filename, MAX_DOCUMENT_BYTES + 1);
+      }
+    } }, async () => {
+      await assert.rejects(readSelectedDocument(filename, root), { code: 'TOO_LARGE' }, `snapshot ${snapshot}`);
+    });
+    assert(expanded, `snapshot ${snapshot} must attempt its own bounded read from offset zero`);
+    assert.equal(starts, snapshot);
+  }
+});
+
+test('stable empty, Unicode, and exactly two MiB documents survive independent full reads', { concurrency: false }, async t => {
+  const { directory, root } = await fixture(t);
+  const unicodePrefix = '# 中文文稿 ✨\n';
+  const cases = [
+    ['empty-twice.md', ''],
+    ['中文文稿.md', `${unicodePrefix}内容可以正常读取。\n`],
+    ['exact-limit.md', unicodePrefix + 'x'.repeat(MAX_DOCUMENT_BYTES - Buffer.byteLength(unicodePrefix))],
+  ];
+  for (const [name, content] of cases) {
+    const filename = path.join(directory, name);
+    await fs.writeFile(filename, content);
+    let readsFromStart = 0;
+    await withFileReads(filename, { before: args => { if (args[3] === 0) readsFromStart++; } }, async () => {
+      const result = await readSelectedDocument(filename, root);
+      assert.equal(result.fileName, name);
+      assert.equal(result.content, content);
+      assert.equal(Object.hasOwn(result, 'workspacePath'), false);
+    });
+    assert(readsFromStart >= 2, `${name} must be verified by independent reads from offset zero`);
+    assert.equal(await fs.readFile(filename, 'utf8'), content);
+  }
+  assert.equal(Buffer.byteLength(cases[2][1]), MAX_DOCUMENT_BYTES);
 });
 
 test('native open events wait for a ready renderer and are read and delivered in order', async () => {

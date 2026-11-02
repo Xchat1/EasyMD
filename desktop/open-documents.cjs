@@ -21,9 +21,20 @@ function requireRegularFile(stat) {
   if (stat.size > MAX_DOCUMENT_BYTES) throw fileError('文稿超过 2 MiB，请缩小文件后再打开。', 'TOO_LARGE');
 }
 
-function sameVersion(left, right) {
-  return left.dev === right.dev && left.ino === right.ino && left.size === right.size
-    && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+async function readBounded(handle) {
+  const bytes = Buffer.alloc(MAX_DOCUMENT_BYTES + 1);
+  let length = 0;
+  while (length < bytes.length) {
+    const result = await handle.read(bytes, length, bytes.length - length, length);
+    if (!result.bytesRead) break;
+    length += result.bytesRead;
+  }
+  if (length > MAX_DOCUMENT_BYTES) throw fileError('文稿超过 2 MiB，请缩小文件后再打开。', 'TOO_LARGE');
+  return bytes.subarray(0, length);
 }
 
 function safeWorkspacePath(root, filename) {
@@ -51,26 +62,26 @@ async function readSelectedDocument(filename, workspaceRoot) {
     handle = await fs.open(canonical, constants.O_RDONLY | (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0));
     const before = await handle.stat();
     requireRegularFile(before);
-    if (!sameVersion(selected, before)) throw fileError('文稿在打开期间发生了变化，请重新打开。', 'FILE_CHANGED');
+    if (!sameIdentity(selected, before)) throw fileError('文稿在打开期间被替换，请重新打开。', 'FILE_CHANGED');
 
-    // Bound allocation and reads even if the selected file grows after stat().
-    const bytes = Buffer.alloc(MAX_DOCUMENT_BYTES + 1);
-    let length = 0;
-    while (length < bytes.length) {
-      const result = await handle.read(bytes, length, bytes.length - length, length);
-      if (!result.bytesRead) break;
-      length += result.bytesRead;
-    }
-    if (length > MAX_DOCUMENT_BYTES) throw fileError('文稿超过 2 MiB，请缩小文件后再打开。', 'TOO_LARGE');
+    // Permissions, Finder attributes and cloud metadata can change timestamps
+    // without changing the document. Compare bounded byte snapshots instead;
+    // every read starts at position zero on the same checked descriptor.
+    const first = await readBounded(handle);
+    const middle = await handle.stat();
+    requireRegularFile(middle);
+    if (!sameIdentity(before, middle)) throw fileError('文稿在读取期间被替换，请重新打开。', 'FILE_CHANGED');
+    const bytes = await readBounded(handle);
     const after = await handle.stat();
     const current = await fs.lstat(filename);
     requireRegularFile(after);
     requireRegularFile(current);
-    if (!sameVersion(before, after) || !sameVersion(before, current)
-      || length !== before.size || await fs.realpath(filename) !== canonical) {
+    if (!sameIdentity(before, after) || !sameIdentity(before, current)
+      || !first.equals(bytes) || bytes.length !== after.size || bytes.length !== current.size
+      || await fs.realpath(filename) !== canonical) {
       throw fileError('文稿在读取期间被修改或移动，请重新打开。', 'FILE_CHANGED');
     }
-    const content = bytes.subarray(0, length).toString('utf8');
+    const content = bytes.toString('utf8');
     if (Buffer.byteLength(content, 'utf8') > MAX_DOCUMENT_BYTES) {
       throw fileError('解码后的文稿超过 2 MiB，请缩小文件后再打开。', 'TOO_LARGE');
     }

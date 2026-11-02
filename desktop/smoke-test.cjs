@@ -34,6 +34,25 @@ exports.runSmokeTest = async ({ window, workspace, appDirectory }) => {
 
   const externalDirectory = path.join(path.dirname(workspace.root), 'External test files');
   await fs.mkdir(externalDirectory, { recursive: true });
+  const metadataFile = path.join(externalDirectory, '属性更新但内容未变.md');
+  const metadataContent = '# Existing document with unchanged content\n';
+  await fs.writeFile(metadataFile, metadataContent, { mode: 0o600 });
+  const originalLstat = fs.lstat;
+  let metadataChanged = false;
+  fs.lstat = async function (filename, ...args) {
+    const selected = await originalLstat.call(this, filename, ...args);
+    if (filename === metadataFile && !metadataChanged) {
+      metadataChanged = true;
+      await fs.chmod(metadataFile, 0o640);
+    }
+    return selected;
+  };
+  try {
+    app.emit('open-file', { preventDefault() {} }, metadataFile);
+    await until(() => contents.executeJavaScript(`document.title.includes('属性更新但内容未变.md') && document.querySelector('.cm-content')?.getAttribute('contenteditable') === 'true'`), 'Finder opens a document whose attributes changed before open');
+    assert(metadataChanged, 'The native metadata-change regression was not exercised');
+    assert.equal(await fs.readFile(metadataFile, 'utf8'), metadataContent);
+  } finally { fs.lstat = originalLstat; }
   const finderFile = path.join(externalDirectory, '访达已存在的文稿.md');
   const original = '# Existing Markdown\n\n中文路径和已有文件。\n';
   await fs.writeFile(finderFile, original);
