@@ -86,6 +86,11 @@ jobs:
         run: |
           if [ "$BUILD_ARCH" = arm64 ]; then app_path=release/mac-arm64/EasyMD.app; else app_path=release/mac/EasyMD.app; fi
           "$app_path/Contents/MacOS/EasyMD" --smoke-test
+      - name: Exercise Finder cold launch with an existing Markdown document
+        timeout-minutes: 4
+        run: |
+          if [ "$BUILD_ARCH" = arm64 ]; then app_path=release/mac-arm64/EasyMD.app; else app_path=release/mac/EasyMD.app; fi
+          node .github/scripts/smoke-finder-open.mjs "$app_path"
       - name: Upload only release artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

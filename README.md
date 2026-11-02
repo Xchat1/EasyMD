@@ -19,10 +19,14 @@
 
 | Mac 类型 | DMG 安装包 |
 | :--- | :--- |
-| Apple 芯片 | [EasyMD 1.0.1 · arm64](https://github.com/Xchat1/EasyMD/releases/download/v1.0.1/EasyMD-1.0.1-mac-arm64.dmg) |
-| Intel 处理器 | [EasyMD 1.0.1 · x64](https://github.com/Xchat1/EasyMD/releases/download/v1.0.1/EasyMD-1.0.1-mac-x64.dmg) |
+| Apple 芯片 | [EasyMD 1.0.2 · arm64](https://github.com/Xchat1/EasyMD/releases/download/v1.0.2/EasyMD-1.0.2-mac-arm64.dmg) |
+| Intel 处理器 | [EasyMD 1.0.2 · x64](https://github.com/Xchat1/EasyMD/releases/download/v1.0.2/EasyMD-1.0.2-mac-x64.dmg) |
 
 打开 DMG，将 **EasyMD 拖入“应用程序”**，再启动应用。**无需安装 Node.js、pnpm 或 Chrome**。也提供 ZIP、SHA-256 校验值和构建信息。
+
+v1.0.2 起支持在访达中通过“打开方式 → EasyMD”打开 `.md` / `.markdown`，也可把文稿拖到 Dock 的 EasyMD 图标，或在应用内按 ⌘O。应用未运行时的打开请求也会在启动后载入。EasyMD 不会抢占系统默认打开方式；如需双击直接打开，可在访达“显示简介 → 打开方式”中选择 EasyMD。
+
+**保存位置**：文稿目录内的文件直接打开；其他位置的文件导入为 `文稿/EasyMD` 中的副本，编辑自动保存到副本。导入时会提示保存位置，同名文件不会覆盖。
 
 当前是采用临时签名的预览版，**尚无 Apple Developer ID 签名，也未经 Apple 公证**，不提供自动更新。首次打开可能被 macOS 阻止；确认来源可信后，按 [Apple 官方指引](https://support.apple.com/en-us/102445)，在尝试打开后进入“系统设置 → 隐私与安全性 → 仍要打开”。不要全局关闭 Gatekeeper。
 

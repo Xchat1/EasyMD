@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { SECURE_WEB_PREFERENCES, createDesktopSecurityPolicy } = require('./security.cjs');
+const { DOCUMENT_EXTENSIONS, readSelectedDocument, createOpenDocumentQueue } = require('./open-documents.cjs');
 
 const smokeTest = process.argv.includes('--smoke-test');
 const smokeDirectory = smokeTest ? fs.mkdtempSync(path.join(os.tmpdir(), 'easymd-app-test-')) : null;
@@ -20,6 +21,67 @@ let mainWindow, workspace, policy, desktopSession;
 let quitting = false, closing = false, previewDeadline = 0;
 const previews = new Set();
 const appDirectory = app.getAppPath();
+let fileAlertVisible = false, filePickerActive = false;
+
+async function showFileOpenError(error, fileName = '') {
+  if (fileAlertVisible) return;
+  fileAlertVisible = true;
+  try {
+    await app.whenReady();
+    if (quitting || closing) return;
+    const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    const safeName = fileName.replace(/[\x00-\x1f\x7f]/g, ' ');
+    const options = { type: 'error', title: '无法打开文稿',
+      message: safeName ? `无法打开“${safeName}”。` : '无法打开所选文稿。',
+      detail: error instanceof Error ? error.message : '请重新选择文件后重试。', buttons: ['好'] };
+    if (owner) await dialog.showMessageBox(owner, options);
+    else await dialog.showMessageBox(options);
+  } catch { /* The application/window may have closed while showing the alert. */ }
+  finally { fileAlertVisible = false; }
+}
+
+const openDocuments = createOpenDocumentQueue({
+  readDocument: filename => readSelectedDocument(filename, workspace.root),
+  deliver: (recipient, document) => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents !== recipient.contents
+      || recipient.contents.mainFrame !== recipient.frame
+      || !policy.isAppNavigation({ url: recipient.frame.url, isMainFrame: true })) return false;
+    recipient.frame.send('easymd:opened-file', document);
+    return true;
+  },
+  onError: showFileOpenError,
+});
+
+// Finder/Dock may send this before app.ready or before the renderer subscribes.
+app.on('open-file', (event, filename) => {
+  event.preventDefault();
+  if (quitting || closing) return;
+  openDocuments.enqueuePath(filename);
+  if (workspace && app.isReady()) void createWindow().catch(error => showFileOpenError(error));
+});
+
+async function chooseNativeDocument(owner) {
+  if (filePickerActive) return null;
+  filePickerActive = true;
+  try {
+    const result = await dialog.showOpenDialog(owner, {
+      title: '打开文稿', buttonLabel: '打开',
+      message: '工作区内的文稿直接打开；其他文稿会导入副本，原文件保持不变。',
+      properties: ['openFile'],
+      filters: [{ name: 'Markdown、HTML 与纯文本', extensions: DOCUMENT_EXTENSIONS }],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return await readSelectedDocument(result.filePaths[0], workspace.root);
+  } finally { filePickerActive = false; }
+}
+
+async function openFromNativeMenu() {
+  try {
+    const owner = await createWindow();
+    const document = await chooseNativeDocument(owner);
+    if (document) openDocuments.enqueueDocument(document);
+  } catch (error) { await showFileOpenError(error); }
+}
 
 function trustedSender(event) {
   return !!mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents
@@ -29,6 +91,12 @@ function trustedSender(event) {
 
 function protectWindow(window, main = false) {
   const contents = window.webContents;
+  if (main) {
+    contents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace) { openDocuments.clearReady(); previewDeadline = 0; }
+    });
+    contents.on('render-process-gone', () => openDocuments.clearReady());
+  }
   contents.on('will-attach-webview', event => event.preventDefault());
   contents.on('will-navigate', (event, url) => {
     if (!main || !policy.isAppNavigation({ url, isMainFrame: true })) event.preventDefault();
@@ -67,7 +135,11 @@ function protectWindow(window, main = false) {
 }
 
 async function createWindow() {
-  if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); return mainWindow; }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show(); mainWindow.focus(); return mainWindow;
+  }
+  openDocuments.clearReady();
   const window = new BrowserWindow({
     title: 'EasyMD', width: 1440, height: 960, minWidth: 900, minHeight: 600,
     show: false, backgroundColor: '#f6f6f7',
@@ -79,6 +151,7 @@ async function createWindow() {
   window.webContents.setUserAgent(`${window.webContents.getUserAgent()} EasyMDDesktop/${app.getVersion()}`);
   protectWindow(window, true);
   window.on('closed', () => {
+    openDocuments.clearReady();
     for (const child of previews) if (!child.isDestroyed()) child.destroy();
     previews.clear(); mainWindow = null;
   });
@@ -128,7 +201,7 @@ function installMenu() {
     { label: 'EasyMD', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'services' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
     { label: '文件', submenu: [
       { label: '新建文稿', accelerator: 'CmdOrCtrl+N', click: () => command('n') },
-      { label: '打开文件…', accelerator: 'CmdOrCtrl+O', click: () => command('o') },
+      { label: '打开文件…', accelerator: 'CmdOrCtrl+O', click: () => { void openFromNativeMenu(); } },
       { label: '导出与分享…', accelerator: 'CmdOrCtrl+S', click: () => command('s') },
       { label: '打印…', accelerator: 'CmdOrCtrl+P', click: () => command('p') },
       { type: 'separator' }, { label: '在访达中显示文稿目录', click: () => shell.showItemInFolder(workspace.root) }, { role: 'close' },
@@ -155,6 +228,18 @@ async function start() {
   await desktopSession.clearCache();
   await desktopSession.clearStorageData({ storages: ['serviceworkers', 'cachestorage'] });
   configureSession();
+  ipcMain.handle('easymd:open-file', async (event, ...argumentsFromPage) => {
+    if (!trustedSender(event) || argumentsFromPage.length !== 0) throw new Error('只能从主文稿窗口选择文件；不接受传入文件路径。');
+    const document = await chooseNativeDocument(mainWindow);
+    if (!trustedSender(event)) throw new Error('文稿窗口已改变，请重新选择文件。');
+    return document;
+  });
+  ipcMain.on('easymd:open-files-ready', event => {
+    if (trustedSender(event)) void openDocuments.setReady({ contents: event.sender, frame: event.senderFrame });
+  });
+  ipcMain.on('easymd:open-files-not-ready', event => {
+    if (trustedSender(event)) openDocuments.clearReady();
+  });
   ipcMain.on('easymd:prepare-preview', event => {
     const allowed = trustedSender(event);
     if (allowed) previewDeadline = Date.now() + 1000;

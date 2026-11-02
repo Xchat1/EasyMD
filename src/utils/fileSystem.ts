@@ -1,4 +1,5 @@
 import type { DocMode } from '../types';
+import type { DesktopOpenedFile } from '../types/desktop';
 import { escapeHtml } from './html';
 import { renderMarkdown } from './markdown';
 import { renderMermaidSvg, readMermaidSource } from './diagrams';
@@ -30,7 +31,10 @@ export function downloadFile(content: string, fileName: string, mimeType: string
 }
 
 // Open local file (supports Mac File System Access API or input fallback)
-export async function openLocalFile(): Promise<{ fileName: string; content: string } | null> {
+export async function openLocalFile(): Promise<DesktopOpenedFile | null> {
+  // Electron's File System Access permission context cannot use the browser
+  // permission policy safely. Its fixed native picker reads only the chosen file.
+  if (window.easymdDesktop) return window.easymdDesktop.openFile();
   // 1. Try File System Access API if supported
   if ('showOpenFilePicker' in window) {
     try {

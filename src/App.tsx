@@ -38,6 +38,7 @@ import {
   ICloudNode,
 } from './utils/icloudSync';
 import { useDialog } from './context/DialogContext';
+import type { DesktopOpenedFile } from './types/desktop';
 
 const STORAGE_KEY_DOCS = 'easymd_documents_v1';
 const STORAGE_KEY_FOLDERS = 'easymd_folders_v1';
@@ -172,6 +173,10 @@ export function App() {
   const desktopRestoreRef = useRef<Promise<Awaited<ReturnType<typeof connectDesktopWorkspace>> & { documents: DocumentItem[] }> | null>(null);
   const [isFileOperation, setIsFileOperation] = useState(false);
   const fileOperationRef = useRef(false);
+  const pendingOpenFiles = useRef<DesktopOpenedFile[]>([]);
+  const importingFile = useRef(false);
+  const choosingFile = useRef(false);
+  const [openFilesVersion, setOpenFilesVersion] = useState(0);
   const documentsRef = useRef(documents);
   documentsRef.current = documents;
   const toastRef = useRef(toast);
@@ -544,15 +549,26 @@ export function App() {
     }
   });
 
-  // Open Local File
-  const handleOpenFile = async () => {
-    if (!writableRef.current || fileOperationRef.current || !handlesRestored) return;
-    const result = await openLocalFile().catch((error) => {
-      toast.error(error instanceof Error ? error.message : '无法读取此文件');
-      return null;
-    });
-    if (!result || !writableRef.current || fileOperationRef.current || !readyRef.current) return;
+  const enqueueOpenFile = (file: DesktopOpenedFile) => {
+    pendingOpenFiles.current.push(file);
+    setOpenFilesVersion((version) => version + 1);
+  };
 
+  // Picker results and Finder requests share the same serial import queue.
+  const handleOpenFile = async () => {
+    if (choosingFile.current) return;
+    if (!handlesRestored) { toast.info('文稿目录正在准备，请稍后再打开。'); return; }
+    if (!writableRef.current) { toast.error('请先恢复文稿目录的写入权限，再打开文件。'); return; }
+    choosingFile.current = true;
+    try {
+      const result = await openLocalFile();
+      if (result) enqueueOpenFile(result);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '无法读取此文件');
+    } finally { choosingFile.current = false; }
+  };
+
+  const importOpenedFile = async (result: DesktopOpenedFile) => {
     const detectedMode = detectFileMode(result.fileName);
     const newId = crypto.randomUUID();
     const newDoc: DocumentItem = {
@@ -565,14 +581,13 @@ export function App() {
     };
 
     if (mountedRootRef.current) {
-      await withFileOperation(async () => {
-        const connection = await connectDesktopWorkspace();
-        const [imported] = await restoreDesktopDocuments(connection.root, connection.workspaceId, [newDoc], []);
-        if (imported.fileHandle) saveQueue.bind(imported.id, imported.fileHandle, imported.content);
-        setDocuments((prev) => [imported, ...prev]);
-        setCurrentDocId(imported.id);
-        await refreshICloudTree();
-      });
+      const connection = await connectDesktopWorkspace();
+      const [imported] = await restoreDesktopDocuments(connection.root, connection.workspaceId, [newDoc], []);
+      if (imported.fileHandle) saveQueue.bind(imported.id, imported.fileHandle, imported.content);
+      setDocuments((prev) => [imported, ...prev]);
+      setCurrentDocId(imported.id);
+      await refreshICloudTree();
+      toast.success(`已导入 ${workspaceDirectory}，编辑将保存到文稿副本。`);
     } else {
       setDocuments((prev) => [newDoc, ...prev]);
       setCurrentDocId(newId);
@@ -640,8 +655,7 @@ export function App() {
 
   const handleRefreshICloud = () => withFileOperation(refreshICloudTree);
 
-  const handleOpenICloudFile = (handle: FileSystemFileHandle, name: string, mode: DocMode) =>
-    withFileOperation(async () => {
+  const openICloudFile = async (handle: FileSystemFileHandle, name: string, mode: DocMode) => {
       const root = mountedRootRef.current;
       if (!root) throw new Error('请先连接目录');
       const path = await root.resolve(handle);
@@ -676,7 +690,39 @@ export function App() {
       setDocuments((prev) => existing
         ? prev.map((doc) => doc.id === id ? opened : doc) : [opened, ...prev]);
       setCurrentDocId(id);
+    };
+
+  const handleOpenICloudFile = (handle: FileSystemFileHandle, name: string, mode: DocMode) =>
+    withFileOperation(() => openICloudFile(handle, name, mode));
+
+  useEffect(() => {
+    if (!handlesRestored || !window.easymdDesktop) return;
+    return window.easymdDesktop.onOpenFile(enqueueOpenFile);
+  }, [handlesRestored]);
+
+  useEffect(() => {
+    if (!handlesRestored || !workspace.isWritable || isFileOperation || importingFile.current
+      || fileOperationRef.current || !pendingOpenFiles.current.length) return;
+    const file = pendingOpenFiles.current.shift()!;
+    importingFile.current = true;
+    void withFileOperation(async () => {
+      const root = mountedRootRef.current;
+      if (file.workspacePath && root) {
+        // A file already in the managed directory opens its existing binding.
+        const parts = file.workspacePath.split('/');
+        if (parts.some((part) => !part || part === '.' || part === '..' || part.includes('\\'))) {
+          throw new Error('文稿路径无效，请从目录中重新打开。');
+        }
+        let parent = root;
+        for (const part of parts.slice(0, -1)) parent = await parent.getDirectoryHandle(part);
+        const handle = await parent.getFileHandle(parts.at(-1)!);
+        await openICloudFile(handle, handle.name, detectFileMode(handle.name));
+      } else await importOpenedFile(file);
+    }).finally(() => {
+      importingFile.current = false;
+      setOpenFilesVersion((version) => version + 1);
     });
+  }, [handlesRestored, workspace.isWritable, isFileOperation, openFilesVersion]);
 
   const handleCreateICloudFileInDir = async (parent: FileSystemDirectoryHandle, mode: DocMode) => {
     const extension = mode === 'h5' ? 'html' : mode;

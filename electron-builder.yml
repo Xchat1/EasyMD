@@ -39,6 +39,25 @@ mac:
   category: public.app-category.productivity
   icon: assets/app-icon.icns
   darkModeSupport: true
+  fileAssociations:
+    - ext:
+        - md
+        - markdown
+      name: Markdown 文稿
+      role: Editor
+      rank: Alternate
+    - ext:
+        - html
+        - htm
+      name: HTML 文稿
+      role: Editor
+      rank: Alternate
+    - ext:
+        - txt
+        - log
+      name: 纯文本文稿
+      role: Editor
+      rank: Alternate
   extendInfo:
     NSDocumentsFolderUsageDescription: EasyMD 需要在文稿/EasyMD 中保存和读取你的文稿。
     NSDownloadsFolderUsageDescription: EasyMD 仅在你选择导出位置后保存导出的文稿。

@@ -29,6 +29,30 @@ if (trustedAppEntry()) {
       }
       catch { return false; }
     },
+    openFile: async () => {
+      if (!trustedAppEntry() || navigator.userActivation?.isActive !== true) {
+        throw new Error('请通过“打开文件”按钮选择文稿。');
+      }
+      return ipcRenderer.invoke('easymd:open-file');
+    },
+    onOpenFile: callback => {
+      if (!trustedAppEntry() || typeof callback !== 'function') throw new TypeError('无效的文稿接收器。');
+      let active = true;
+      const handler = (_event, file) => {
+        if (!active || !trustedAppEntry() || !file || typeof file.fileName !== 'string' || typeof file.content !== 'string') return;
+        callback({ fileName: file.fileName, content: file.content,
+          ...(typeof file.workspacePath === 'string' ? { workspacePath: file.workspacePath } : {}) });
+      };
+      ipcRenderer.on('easymd:opened-file', handler);
+      try { ipcRenderer.send('easymd:open-files-ready'); }
+      catch (error) { active = false; ipcRenderer.removeListener('easymd:opened-file', handler); throw error; }
+      return () => {
+        if (!active) return;
+        active = false;
+        ipcRenderer.removeListener('easymd:opened-file', handler);
+        try { ipcRenderer.send('easymd:open-files-not-ready'); } catch { /* Window is closing. */ }
+      };
+    },
   }));
 
   // The isolated world sees the native event; synthetic page events cannot

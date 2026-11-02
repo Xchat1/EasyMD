@@ -27,6 +27,13 @@ assert.equal(await readFile(path.join(appFiles, 'LICENSE'), 'utf8'), await readF
 assert.equal(await readFile(path.join(appFiles, 'dist/LICENSE.txt'), 'utf8'), await readFile('LICENSE', 'utf8'));
 
 const plist = (file, key = 'LSMinimumSystemVersion') => execFileSync('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, file], { encoding: 'utf8' }).trim();
+const appPlist = JSON.parse(execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', path.join(app, 'Contents/Info.plist')], { encoding: 'utf8' }));
+for (const extension of ['md', 'markdown', 'html', 'htm', 'txt', 'log']) {
+  const association = appPlist.CFBundleDocumentTypes?.find(type => type.CFBundleTypeExtensions?.includes(extension));
+  assert(association, `Missing macOS document association: ${extension}`);
+  assert.equal(association.CFBundleTypeRole, 'Editor');
+  assert.equal(association.LSHandlerRank, 'Alternate', 'Document associations must not take over the default application');
+}
 const declaredIcon = plist(path.join(app, 'Contents/Info.plist'), 'CFBundleIconFile');
 assert(declaredIcon && path.basename(declaredIcon) === declaredIcon && !declaredIcon.includes('\\'), 'CFBundleIconFile must name an icon directly in Resources');
 const iconFile = declaredIcon.endsWith('.icns') ? declaredIcon : `${declaredIcon}.icns`;
@@ -54,6 +61,7 @@ const buildInfo = {
   signing: 'ad-hoc; no Developer ID signature',
   notarized: false,
   automaticUpdates: false,
+  finderOpen: true,
   icon: { file: iconFile, sha256: createHash('sha256').update(sourceIcon).digest('hex') },
 };
 const infoName = `build-info-${arch}.json`;
