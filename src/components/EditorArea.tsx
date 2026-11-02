@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
 import { html } from '@codemirror/lang-html';
@@ -6,6 +6,8 @@ import { indentUnit } from '@codemirror/language';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { EditorView } from '@codemirror/view';
 import { DocMode, EditorSettings, ThemeMode } from '../types';
+import { escapeHtml } from '../utils/html';
+import { MAX_DOCUMENT_BYTES, utf8ByteLength } from '../utils/documentLimits';
 
 interface EditorAreaProps {
   content: string;
@@ -15,6 +17,7 @@ interface EditorAreaProps {
   settings: EditorSettings;
   editorRef: React.RefObject<ReactCodeMirrorRef | null>;
   onCursorChange?: (line: number, col: number) => void;
+  readOnly?: boolean;
 }
 
 export const EditorArea: React.FC<EditorAreaProps> = ({
@@ -25,8 +28,19 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
   settings,
   editorRef,
   onCursorChange,
+  readOnly = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const pendingReaders = useRef(new Set<FileReader>());
+  const readOnlyRef = useRef(readOnly);
+  const modeRef = useRef(mode);
+  const [importNotice, setImportNotice] = useState('');
+  readOnlyRef.current = readOnly;
+  modeRef.current = mode;
+  useEffect(() => () => {
+    for (const reader of pendingReaders.current) reader.abort();
+    pendingReaders.current.clear();
+  }, []);
 
   // Compute language extension based on current document mode
   const extensions = useMemo(() => {
@@ -79,92 +93,95 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
     );
 
     return list;
-  }, [mode, settings.wordWrap, settings.fontSize]);
+  }, [mode, settings.wordWrap, settings.fontSize, settings.tabSize]);
 
-  // Handle Drag & Drop of files or images
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      const files = e.dataTransfer.files;
-      if (!files || files.length === 0) return;
-
-      const file = files[0];
-      if (file.type.startsWith('image/')) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const base64 = event.target?.result as string;
-          const imgTag =
-            mode === 'h5'
-              ? `<img src="${base64}" alt="${file.name}" style="max-width: 100%; border-radius: 8px;" />`
-              : `![${file.name}](${base64})`;
-
-          // Append to content
-          onChange(content ? `${content}\n\n${imgTag}` : imgTag);
-        };
-        reader.readAsDataURL(file);
-      } else {
-        // Read text file
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const text = event.target?.result as string;
-          if (text) onChange(text);
-        };
-        reader.readAsText(file);
+  // Keep asynchronous reads attached to the editor that initiated them. A shared
+  // ref may already point at another document when FileReader completes.
+  const readIntoEditor = useCallback((file: File, placement: 'end' | 'cursor') => {
+    const targetView = editorRef.current?.view;
+    if (!targetView || readOnlyRef.current) return;
+    if (!file.type.startsWith('image/')) {
+      setImportNotice('请使用“打开文件”导入文稿，当前内容已保留。');
+      return;
+    }
+    if (mode === 'txt') {
+      setImportNotice('纯文本不支持插入图片，请切换到 Markdown 或 HTML 文稿。');
+      return;
+    }
+    const imageMarkup = (url: string) => {
+      const label = file.name.replace(/[\[\]\\]/g, '\\$&');
+      return mode === 'h5'
+        ? `<img src="${url}" alt="${escapeHtml(file.name)}" style="max-width:100%" />`
+        : `![${label}](${url})`;
+    };
+    const prefixBytes = utf8ByteLength(imageMarkup(`data:${file.type};base64,`));
+    const currentBytes = utf8ByteLength(targetView.state.doc.toString());
+    const separatorBytes = placement === 'end' && targetView.state.doc.length ? 2 : 0;
+    // Base64 expands binary images. Check before allocating the entire data URL.
+    if (currentBytes + prefixBytes + 4 * Math.ceil(file.size / 3) + separatorBytes > MAX_DOCUMENT_BYTES) {
+      setImportNotice('插入图片后文稿将超过 2 MiB，请压缩图片后重试。');
+      return;
+    }
+    setImportNotice('');
+    const reader = new FileReader();
+    pendingReaders.current.add(reader);
+    reader.onloadend = () => pendingReaders.current.delete(reader);
+    reader.onerror = () => setImportNotice('图片读取失败，请重试。');
+    reader.onload = () => {
+      if (!pendingReaders.current.has(reader) || readOnlyRef.current || modeRef.current !== mode
+        || editorRef.current?.view !== targetView || typeof reader.result !== 'string') return;
+      const markup = imageMarkup(reader.result);
+      const from = placement === 'end' ? targetView.state.doc.length : targetView.state.selection.main.head;
+      const insert = placement === 'end' && from ? `\n\n${markup}` : markup;
+      // Recheck the latest text: typing and other image reads may have finished.
+      if (utf8ByteLength(targetView.state.doc.toString()) + utf8ByteLength(insert) > MAX_DOCUMENT_BYTES) {
+        setImportNotice('插入图片后文稿将超过 2 MiB，当前内容已保留，请压缩图片后重试。');
+        return;
       }
-    },
-    [content, mode, onChange]
-  );
+      targetView.dispatch({ changes: { from, insert }, selection: { anchor: from + insert.length } });
+    };
+    try { reader.readAsDataURL(file); }
+    catch {
+      pendingReaders.current.delete(reader);
+      setImportNotice('图片读取失败，请重试。');
+    }
+  }, [editorRef, mode]);
 
-  // Handle Paste event for images
-  const handlePaste = useCallback(
-    (e: React.ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
+  const handleDrop = useCallback((event: React.DragEvent) => {
+    const file = event.dataTransfer.files[0];
+    if (!file) return;
+    event.preventDefault();
+    event.stopPropagation();
+    readIntoEditor(file, 'end');
+  }, [readIntoEditor]);
 
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.startsWith('image/')) {
-          e.preventDefault();
-          const file = items[i].getAsFile();
-          if (!file) continue;
-
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            const base64 = event.target?.result as string;
-            const imgTag =
-              mode === 'h5'
-                ? `<img src="${base64}" alt="pasted-image" style="max-width: 100%; border-radius: 8px;" />`
-                : `![pasted-image](${base64})`;
-
-            const view = editorRef.current?.view;
-            if (view) {
-              const cursorPos = view.state.selection.main.head;
-              view.dispatch({
-                changes: { from: cursorPos, insert: imgTag },
-                selection: { anchor: cursorPos + imgTag.length },
-              });
-            } else {
-              onChange(content ? `${content}\n${imgTag}` : imgTag);
-            }
-          };
-          reader.readAsDataURL(file);
-          break;
-        }
-      }
-    },
-    [content, editorRef, mode, onChange]
-  );
+  const handlePaste = useCallback((event: React.ClipboardEvent) => {
+    if (readOnlyRef.current) return;
+    for (const item of Array.from(event.clipboardData.items)) {
+      if (!item.type.startsWith('image/')) continue;
+      event.preventDefault();
+      event.stopPropagation();
+      const file = item.getAsFile();
+      if (file) readIntoEditor(file, 'cursor');
+      break;
+    }
+  }, [readIntoEditor]);
 
   return (
     <div
       ref={containerRef}
-      onDrop={handleDrop}
-      onDragOver={(e) => e.preventDefault()}
-      onPaste={handlePaste}
+      onDropCapture={handleDrop}
+      onDragOverCapture={(event) => {
+        if (Array.from(event.dataTransfer.types).includes('Files')) event.preventDefault();
+      }}
+      onPasteCapture={handlePaste}
       className="w-full h-full relative overflow-hidden bg-white dark:bg-[#1e1e20] text-gray-900 dark:text-gray-100"
     >
       <CodeMirror
         ref={editorRef}
         value={content}
+        readOnly={readOnly}
+        editable={!readOnly}
         height="100%"
         theme={theme === 'dark' ? oneDark : 'light'}
         extensions={extensions}
@@ -190,6 +207,11 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
         }}
         className="h-full w-full font-mono text-sm"
       />
+      {importNotice && (
+        <div role="status" className="absolute bottom-3 left-3 right-3 z-10 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 shadow-sm dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+          {importNotice}
+        </div>
+      )}
     </div>
   );
 };

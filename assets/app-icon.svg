@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="EasyMD folded document icon">
+  <defs>
+    <linearGradient id="tile" x1="192" y1="88" x2="832" y2="960" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3896FF"/>
+      <stop offset="1" stop-color="#125BD5"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="310" y1="222" x2="718" y2="824" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EDF6FF"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="592" y1="208" x2="744" y2="362" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D6EBFF"/>
+      <stop offset="1" stop-color="#A1CDFF"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="url(#tile)"/>
+  <rect x="65.5" y="65.5" width="893" height="893" rx="206.5" fill="none" stroke="#FFFFFF" stroke-opacity=".2" stroke-width="3"/>
+  <path d="M326 220H590L750 380V788Q750 842 696 842H326Q274 842 274 790V272Q274 220 326 220Z" fill="#063D9C" fill-opacity=".19"/>
+  <path d="M326 202H590L750 362V770Q750 824 696 824H326Q274 824 274 772V254Q274 202 326 202Z" fill="url(#paper)"/>
+  <path d="M590 202L750 362H634Q590 362 590 318Z" fill="url(#fold)"/>
+  <path d="M590 222V318Q590 362 634 362H730" fill="none" stroke="#85B8EE" stroke-opacity=".38" stroke-width="4"/>
+  <path d="M606 426H378V606H606M378 516H550" fill="none" stroke="#196BE0" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M378 676H610M378 728H542" fill="none" stroke="#B3D3F5" stroke-width="20" stroke-linecap="round"/>
+</svg>

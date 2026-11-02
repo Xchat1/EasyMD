@@ -1,5 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import mermaid from 'mermaid';
+import { renderMermaidSvg, readMermaidSource } from '../utils/diagrams';
+import { openSandboxedPreview } from '../utils/previewWindow';
+import { createPreviewDocument, previewSandbox } from '../utils/previewPrivacy';
+import { useDialog } from '../context/DialogContext';
 import {
   Smartphone,
   Tablet,
@@ -8,6 +11,8 @@ import {
   ExternalLink,
   Copy,
   Check,
+  ShieldCheck,
+  Globe,
 } from 'lucide-react';
 import { DocMode, DevicePreview, ThemeMode } from '../types';
 import { renderMarkdown } from '../utils/markdown';
@@ -17,22 +22,21 @@ interface PreviewAreaProps {
   mode: DocMode;
   theme: ThemeMode;
   previewRef: React.RefObject<HTMLDivElement | null>;
+  allowNetwork?: boolean;
+  networkSignal?: AbortSignal;
+  onToggleNetwork?: () => void;
 }
-
-// Initialize Mermaid once
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'default',
-  securityLevel: 'loose',
-  fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
-});
 
 export const PreviewArea: React.FC<PreviewAreaProps> = ({
   content,
   mode,
   theme,
   previewRef,
+  allowNetwork = false,
+  networkSignal,
+  onToggleNetwork,
 }) => {
+  const { toast } = useDialog();
   const [renderedHtml, setRenderedHtml] = useState<string>('');
   const [device, setDevice] = useState<DevicePreview>('responsive');
   const [copiedCodeIndex, setCopiedCodeIndex] = useState<number | null>(null);
@@ -44,9 +48,9 @@ export const PreviewArea: React.FC<PreviewAreaProps> = ({
     if (!content) return '';
     const trimmed = content.trim().toLowerCase();
     if (trimmed.startsWith('<!doctype html') || trimmed.startsWith('<html')) {
-      return content;
+      return createPreviewDocument(content, allowNetwork);
     }
-    return `<!DOCTYPE html>
+    return createPreviewDocument(`<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -65,48 +69,42 @@ export const PreviewArea: React.FC<PreviewAreaProps> = ({
 <body>
 ${content}
 </body>
-</html>`;
-  }, [content]);
+</html>`, allowNetwork);
+  }, [content, allowNetwork]);
 
   // Markdown rendering
   useEffect(() => {
     if (mode === 'md') {
       let isCurrent = true;
-      renderMarkdown(content).then((html) => {
+      renderMarkdown(content, allowNetwork).then((html) => {
         if (isCurrent) {
           setRenderedHtml(html);
         }
-      });
+      }).catch(() => { if (isCurrent) setRenderedHtml('<p>暂时无法预览此文稿，请检查内容。</p>'); });
       return () => {
         isCurrent = false;
       };
     }
-  }, [content, mode]);
+  }, [content, mode, allowNetwork]);
 
   // Mermaid re-run after DOM update
   useEffect(() => {
     if (mode === 'md' && mdContainerRef.current) {
-      mermaid.initialize({
-        startOnLoad: false,
-        theme: theme === 'dark' ? 'dark' : 'default',
-        securityLevel: 'loose',
-      });
-
-      const mermaidNodes = mdContainerRef.current.querySelectorAll('.mermaid');
-      if (mermaidNodes.length > 0) {
-        // Reset processed status
-        mermaidNodes.forEach((node) => {
-          node.removeAttribute('data-processed');
-          const source = node.getAttribute('data-source');
-          if (source) {
-            node.textContent = source;
-          }
-        });
-
-        mermaid.run({
-          nodes: Array.from(mermaidNodes) as HTMLElement[],
-        }).catch((err) => {
-          console.warn('Mermaid rendering skipped or failed:', err);
+      let cancelled = false;
+      const controller = new AbortController();
+      const revoke = () => controller.abort();
+      if (networkSignal?.aborted) controller.abort();
+      networkSignal?.addEventListener('abort', revoke, { once: true });
+      const mermaidNodes = mdContainerRef.current.querySelectorAll<HTMLElement>('.mermaid');
+      for (const node of mermaidNodes) {
+        const source = readMermaidSource(node);
+        if (!source) continue;
+        node.setAttribute('data-source', encodeURIComponent(source));
+        node.setAttribute('data-source-encoding', 'uri');
+        void renderMermaidSvg(source, theme === 'dark', allowNetwork, controller.signal).then((svg) => {
+          if (!cancelled && node.isConnected) node.innerHTML = svg;
+        }).catch((error) => {
+          if (!cancelled && node.isConnected) node.textContent = error instanceof Error ? error.message : '图表暂时无法预览';
         });
       }
 
@@ -134,8 +132,9 @@ ${content}
 
         pre.appendChild(btn);
       });
+      return () => { cancelled = true; controller.abort(); networkSignal?.removeEventListener('abort', revoke); };
     }
-  }, [renderedHtml, mode, theme]);
+  }, [renderedHtml, mode, theme, allowNetwork, networkSignal]);
 
   // H5 Device Viewport Sizing
   const getDeviceStyle = () => {
@@ -170,11 +169,10 @@ ${content}
 
   // Open H5 in new window
   const openInNewTab = () => {
-    const win = window.open('', '_blank');
-    if (win) {
-      win.document.open();
-      win.document.write(content);
-      win.document.close();
+    try {
+      openSandboxedPreview(content, allowNetwork, networkSignal);
+    } catch (error) {
+      toast.error((error as Error).message);
     }
   };
 
@@ -183,6 +181,18 @@ ${content}
       ref={previewRef}
       className="w-full h-full flex flex-col bg-[#fafafc] dark:bg-[#18181a] relative overflow-hidden text-gray-900 dark:text-gray-100"
     >
+      {mode !== 'txt' && (
+        <div className="min-h-9 px-4 py-1.5 flex items-center justify-between gap-3 border-b border-black/[0.06] dark:border-white/[0.08] bg-white/70 dark:bg-[#202022]/70 text-xs flex-shrink-0">
+          <span className={`flex items-center gap-1.5 ${allowNetwork ? 'text-amber-700 dark:text-amber-400' : 'text-gray-500 dark:text-gray-400'}`}>
+            {allowNetwork ? <Globe size={13} /> : <ShieldCheck size={13} />}
+            {allowNetwork ? '此文稿已允许联网' : mode === 'h5' ? '外部资源与脚本已阻止' : '外部资源已阻止'}
+          </span>
+          {onToggleNetwork && <button type="button" onClick={onToggleNetwork} aria-pressed={allowNetwork}
+            className="px-2 py-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-blue-600 dark:text-blue-400 whitespace-nowrap">
+            {allowNetwork ? '停止联网' : '允许此文稿联网'}
+          </button>}
+        </div>
+      )}
       {/* H5 Mode Device Switcher Bar */}
       {mode === 'h5' && (
         <div className="h-10 px-4 bg-white/70 dark:bg-[#202022]/70 backdrop-blur-md border-b border-black/[0.06] dark:border-white/[0.08] flex items-center justify-between z-10 select-none">
@@ -282,7 +292,8 @@ ${content}
                 key={iframeKey}
                 title="H5 Live Preview"
                 srcDoc={safeIframeDoc}
-                sandbox="allow-scripts allow-modals allow-forms"
+                sandbox={previewSandbox(allowNetwork)}
+                referrerPolicy="no-referrer"
                 className="w-full h-full border-none"
               />
 

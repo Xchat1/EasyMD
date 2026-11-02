@@ -25,6 +25,9 @@ export interface DocumentItem {
   fileHandle?: FileSystemFileHandle | null;
   isICloudFile?: boolean;
   path?: string;
+  lastSyncedContent?: string;
+  storageBackend?: 'desktop';
+  storageRoot?: string;
 }
 
 export interface TocItem {

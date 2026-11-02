@@ -1,3 +1,17 @@
+import type { DocMode } from '../types';
+import { escapeHtml } from './html';
+import { renderMarkdown } from './markdown';
+import { renderMermaidSvg, readMermaidSource } from './diagrams';
+import { createPreviewDocument, createClipboardHtml } from './previewPrivacy';
+import { MAX_DOCUMENT_BYTES, utf8ByteLength } from './documentLimits';
+
+async function readDocumentFile(file: File): Promise<string> {
+  if (file.size > MAX_DOCUMENT_BYTES) throw new RangeError('文稿超过 2 MiB，请缩小文件后再导入。');
+  const content = await file.text();
+  if (utf8ByteLength(content) > MAX_DOCUMENT_BYTES) throw new RangeError('文稿超过 2 MiB，请缩小文件后再导入。');
+  return content;
+}
+
 /**
  * File system & export utility functions for macOS productivity
  */
@@ -37,9 +51,10 @@ export async function openLocalFile(): Promise<{ fileName: string; content: stri
       });
 
       const file = await handle.getFile();
-      const content = await file.text();
+      const content = await readDocumentFile(file);
       return { fileName: file.name, content };
     } catch (err) {
+      if (err instanceof RangeError) throw err;
       if ((err as Error).name === 'AbortError') {
         return null;
       }
@@ -48,19 +63,19 @@ export async function openLocalFile(): Promise<{ fileName: string; content: stri
   }
 
   // 2. Fallback to standard input element
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.md,.markdown,.html,.htm,.txt,.log,.json,.js,.ts,.css';
 
     input.onchange = async () => {
-      if (input.files && input.files.length > 0) {
-        const file = input.files[0];
-        const content = await file.text();
-        resolve({ fileName: file.name, content });
-      } else {
-        resolve(null);
-      }
+      try {
+        if (input.files && input.files.length > 0) {
+          const file = input.files[0];
+          const content = await readDocumentFile(file);
+          resolve({ fileName: file.name, content });
+        } else resolve(null);
+      } catch (error) { reject(error); }
     };
 
     input.oncancel = () => resolve(null);
@@ -122,24 +137,16 @@ export async function copyRichTextToClipboard(htmlContent: string, plainText: st
       });
       await navigator.clipboard.write([item]);
       return true;
-    } else {
-      // Fallback to text copy
-      await navigator.clipboard.writeText(plainText);
-      return true;
     }
+    return false;
   } catch (err) {
     console.error('Copy rich text error:', err);
-    try {
-      await navigator.clipboard.writeText(plainText);
-      return true;
-    } catch {
-      return false;
-    }
+    return false;
   }
 }
 
 // Generate standalone HTML file with embedded styling
-export function generateStandaloneHtml(title: string, bodyContent: string, isH5Mode: boolean = false): string {
+export function generateStandaloneHtml(title: string, bodyContent: string, isH5Mode: boolean = false, extraStyles = ''): string {
   if (isH5Mode) {
     // If it's already a full HTML document, return it directly
     if (bodyContent.trim().toLowerCase().startsWith('<!doctype html') || bodyContent.trim().toLowerCase().startsWith('<html')) {
@@ -152,9 +159,7 @@ export function generateStandaloneHtml(title: string, bodyContent: string, isH5M
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title || 'EasyMD 导出文档'}</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github.min.css">
+  <title>${escapeHtml(title || 'EasyMD 导出文档')}</title>
   <style>
     :root {
       --font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", Roboto, sans-serif;
@@ -246,10 +251,92 @@ export function generateStandaloneHtml(title: string, bodyContent: string, isH5M
         max-width: 100%;
       }
     }
+    .plain-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .mermaid svg { max-width: 100%; height: auto; }
+    ${extraStyles}
   </style>
 </head>
 <body>
   ${bodyContent}
 </body>
 </html>`;
+}
+
+
+/** Render the actual export body, including static diagrams rather than source. */
+async function renderDocumentBody(content: string, mode: DocMode, allowNetwork = false): Promise<string> {
+  if (mode === 'txt') return `<pre class="plain-text">${escapeHtml(content)}</pre>`;
+  if (mode === 'h5') return content;
+  const container = document.createElement('div');
+  container.innerHTML = await renderMarkdown(content, allowNetwork);
+  for (const node of container.querySelectorAll<HTMLElement>('.mermaid')) {
+    const source = readMermaidSource(node);
+    node.innerHTML = await renderMermaidSvg(source, false, allowNetwork);
+    node.removeAttribute('data-source');
+    node.removeAttribute('data-source-encoding');
+  }
+  return container.innerHTML;
+}
+
+/** Shared by the export modal, titlebar and keyboard shortcuts. */
+export async function exportDocumentHtml(title: string, content: string, mode: DocMode, allowNetwork = false): Promise<string> {
+  const body = await renderDocumentBody(content, mode, allowNetwork);
+  const styles = mode === 'md' ? (await import('./exportStyles')).exportStyles : '';
+  return generateStandaloneHtml(title, body, mode === 'h5', styles);
+}
+
+export async function copyDocumentRichText(content: string, mode: DocMode, allowNetwork = false): Promise<boolean> {
+  const rendered = await renderDocumentBody(content, mode, allowNetwork);
+  const body = mode === 'h5' ? createClipboardHtml(rendered, allowNetwork) : rendered;
+  const styles = mode === 'md' ? (await import('./exportStyles')).exportStyles : '';
+  const html = generateStandaloneHtml('', body, mode === 'h5', styles);
+  return copyRichTextToClipboard(html, content);
+}
+
+/** Print in an opaque frame. Offline documents only run the owned bootstrap. */
+export async function printDocument(title: string, content: string, mode: DocMode, allowNetwork = false, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw new DOMException('此文稿的联网授权已撤销', 'AbortError');
+  const html = await exportDocumentHtml(title, content, mode, allowNetwork);
+  if (signal?.aborted) throw new DOMException('此文稿的联网授权已撤销', 'AbortError');
+  const token = crypto.randomUUID();
+  const parsed = new DOMParser().parseFromString(createPreviewDocument(html, allowNetwork, token), 'text/html');
+  const printScript = parsed.createElement('script');
+  printScript.setAttribute('nonce', token);
+  printScript.textContent = `
+    (() => {
+      const token = ${JSON.stringify(token)};
+      addEventListener('afterprint', () => parent.postMessage({ type: 'easymd-print-done', token }, '*'));
+      const onPrintRequest = async (event) => {
+        if (event.source !== parent || event.data?.type !== 'easymd-print' || event.data.token !== token) return;
+        removeEventListener('message', onPrintRequest);
+        await Promise.race([
+          Promise.all([document.fonts.ready, ...Array.from(document.images).map(img => img.complete ? Promise.resolve() : new Promise(resolve => { img.addEventListener('load', resolve, { once: true }); img.addEventListener('error', resolve, { once: true }); }))]),
+          new Promise(resolve => setTimeout(resolve, 5000))
+        ]);
+        focus();
+        print();
+      };
+      addEventListener('message', onPrintRequest);
+    })();`;
+  parsed.body.appendChild(printScript);
+  const frame = document.createElement('iframe');
+  frame.title = '打印文档';
+  frame.setAttribute('sandbox', 'allow-scripts allow-modals');
+  frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:1000px;height:800px;border:0';
+  const cleanup = () => {
+    signal?.removeEventListener('abort', cleanup);
+    window.removeEventListener('message', onMessage);
+    window.clearTimeout(timeout);
+    frame.remove();
+  };
+  const onMessage = (event: MessageEvent) => {
+    if (event.source === frame.contentWindow && event.data?.type === 'easymd-print-done' && event.data.token === token) cleanup();
+  };
+  window.addEventListener('message', onMessage);
+  // Also reclaim a frame if the browser blocks printing or no afterprint fires.
+  const timeout = window.setTimeout(cleanup, 10 * 60 * 1000);
+  signal?.addEventListener('abort', cleanup, { once: true });
+  frame.onload = () => frame.contentWindow?.postMessage({ type: 'easymd-print', token }, '*');
+  frame.srcdoc = '<!DOCTYPE html>\n' + parsed.documentElement.outerHTML;
+  document.body.appendChild(frame);
 }

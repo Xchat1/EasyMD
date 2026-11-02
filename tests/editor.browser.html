@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>EasyMD 编辑器异步回归测试</title>
+<style>body{font:16px/1.6 system-ui;max-width:1000px;margin:40px auto;padding:0 20px}.pass{color:#157a35}.fail{color:#c42626}li{margin:12px 0}#editor{height:180px;border:1px solid #ddd}</style></head>
+<body><h1>EasyMD 编辑器异步回归测试</h1><p>仅操作临时编辑器，不读写用户文稿。</p><ol id="results"></ol><p id="summary">正在运行…</p><div id="editor"></div>
+<script type="module">
+  import React from 'react';
+  import { createRoot } from 'react-dom/client';
+  import { flushSync } from 'react-dom';
+  import { EditorArea } from '../src/components/EditorArea.tsx';
+  import { MAX_DOCUMENT_BYTES } from '../src/utils/documentLimits.ts';
+  const originalReader = window.FileReader;
+  const readers = [];
+  class DeferredReader {
+    result = null;
+    aborted = false;
+    readAsDataURL() { readers.push(this); }
+    readAsText() { readers.push(this); }
+    abort() { this.aborted = true; this.onloadend?.(); }
+    complete(result = 'data:image/png;base64,AA==') {
+      this.result = result;
+      this.onload?.(); // Deliberately exercise even a stale callback after abort.
+      this.onloadend?.();
+    }
+  }
+  window.FileReader = DeferredReader;
+  const ref = React.createRef();
+  const host = document.getElementById('editor');
+  const root = createRoot(host);
+  const settings = {fontSize:14,lineNumbers:true,wordWrap:true,tabSize:2};
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const tick = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  async function mount(id, content, readOnly = false, mode = 'md') {
+    flushSync(() => root.render(React.createElement(EditorArea, {key:id, content, readOnly,
+      editorRef:ref, mode, theme:'light', settings, onChange() {}})));
+    await tick();
+    assert(ref.current?.view, '编辑器未初始化');
+  }
+  function fileEvent(type, file, target = host.firstElementChild) {
+    const before = readers.length;
+    const event = new Event(type, {bubbles:true,cancelable:true});
+    Object.defineProperty(event, type === 'paste' ? 'clipboardData' : 'dataTransfer', {
+      value: type === 'paste' ? {items:[{type:file.type,getAsFile:() => file}]} : {files:[file],types:['Files']},
+    });
+    target.dispatchEvent(event);
+    return readers.length > before ? readers.at(-1) : undefined;
+  }
+  function imageEvent(type, name = 'picture.png') {
+    return fileEvent(type, new File(['test'], name, {type:'image/png'}));
+  }
+  let passed = 0, failed = 0;
+  async function run(name, operation) {
+    const item = document.createElement('li');
+    document.getElementById('results').append(item);
+    try { await operation(); passed++; item.className='pass'; item.textContent=`PASS — ${name}`; }
+    catch(error) { failed++; item.className='fail'; item.textContent=`FAIL — ${name}: ${error.message}`; }
+  }
+  await run('图片读取期间切换文稿会取消读取，迟到回调不会修改新文稿', async () => {
+    await mount('A', 'Document A');
+    const reader = imageEvent('paste');
+    assert(reader, '未开始读取图片');
+    await mount('B', 'Document B');
+    assert(reader.aborted, '旧文稿的读取未取消');
+    reader.complete();
+    assert(ref.current.view.state.doc.toString() === 'Document B', '迟到的图片被插入其他文稿');
+  });
+  await run('拖入图片期间继续输入，图片完成后仍保留新输入', async () => {
+    await mount('C', 'prefix');
+    const reader = imageEvent('drop');
+    const view = ref.current.view;
+    view.dispatch({changes:{from:view.state.doc.length,insert:'-typed'}});
+    reader.complete();
+    assert(view.state.doc.toString().startsWith('prefix-typed\n\n![picture.png]'), '图片覆盖了读取期间的编辑');
+  });
+  await run('进入只读状态后，尚未完成的图片不会继续修改文稿', async () => {
+    await mount('D', 'unchanged');
+    const reader = imageEvent('paste');
+    await mount('D', 'unchanged', true);
+    reader.complete();
+    assert(ref.current.view.state.doc.toString() === 'unchanged', '只读状态被异步回调绕过');
+  });
+  await run('H5 图片文件名不能注入事件属性', async () => {
+    await mount('E', '', false, 'h5');
+    const name = 'image" onload="alert(1).png';
+    const reader = imageEvent('paste', name); reader.complete();
+    const doc = new DOMParser().parseFromString(ref.current.view.state.doc.toString(), 'text/html');
+    assert(!doc.querySelector('[onload]'), '文件名注入了事件属性');
+    assert(doc.querySelector('img')?.getAttribute('alt') === name, '文件名没有被完整保留');
+  });
+  await run('Markdown 图片名称保留字面括号与反斜杠', async () => {
+    await mount('F', '');
+    const reader = imageEvent('paste', 'x](' + String.fromCharCode(92) + 'name.png'); reader.complete();
+    const value = ref.current.view.state.doc.toString();
+    assert(value.includes('x' + String.fromCharCode(92) + ']('), '闭括号没有被转义');
+    assert(value.includes(String.fromCharCode(92, 92) + 'name'), '反斜杠没有被转义');
+  });
+  await run('拖入非图片文件不会读取或覆盖当前文稿，并提示从打开文件导入', async () => {
+    await mount('G', 'Original document');
+    const reader = fileEvent('drop', new File(['Other file'], 'other.txt', {type:'text/plain'}), host.querySelector('.cm-content'));
+    const view = ref.current.view;
+    view.dispatch({changes:{from:view.state.doc.length,insert:' + typed'}});
+    await tick();
+    assert(!reader, '非图片文件仍触发 FileReader');
+    assert(view.state.doc.toString() === 'Original document + typed', '拖入文件改写了当前文稿');
+    assert(host.querySelector('[role="status"]')?.textContent.includes('打开文件'), '没有显示安全导入方式');
+  });
+  await run('纯文本模式不读取图片、不插入 Markdown 或 HTML 标签', async () => {
+    await mount('H', 'Plain text', false, 'txt');
+    assert(!imageEvent('drop'), 'TXT 拖入图片仍开始读取');
+    assert(!imageEvent('paste'), 'TXT 粘贴图片仍开始读取');
+    await tick();
+    assert(ref.current.view.state.doc.toString() === 'Plain text', 'TXT 被插入图片标记');
+  });
+  await run('超大图片在分配 data URL 前被拒绝，原文稿保持不变', async () => {
+    await mount('I', 'Keep this draft');
+    const file = new File([new Uint8Array(MAX_DOCUMENT_BYTES)], 'large.png', {type:'image/png'});
+    assert(!fileEvent('drop', file), '超大图片仍开始读取');
+    await tick();
+    assert(ref.current.view.state.doc.toString() === 'Keep this draft', '超大图片改写了文稿');
+    assert(host.querySelector('[role="status"]')?.textContent.includes('2 MiB'), '没有说明大小限制');
+  });
+  await run('大小估算使用中文 UTF-8 字节数及 base64 膨胀量', async () => {
+    const text = '汉'.repeat(2000);
+    await mount('J', text);
+    const file = new File([new Uint8Array(Math.floor((MAX_DOCUMENT_BYTES - 4000) * 3 / 4))], 'near-limit.png', {type:'image/png'});
+    assert(!fileEvent('paste', file), '按字符数计算导致超过字节上限的图片仍被读取');
+    assert(ref.current.view.state.doc.toString() === text, '超限操作改变原文');
+  });
+  await run('图片读取期间继续输入后超限，完成回调保留全部新输入', async () => {
+    await mount('K', 'prefix');
+    const size = Math.floor((MAX_DOCUMENT_BYTES - 10000) / 4) * 3;
+    const reader = fileEvent('drop', new File([new Uint8Array(size)], 'pending.png', {type:'image/png'}));
+    assert(reader, '上限内图片未开始读取');
+    const view = ref.current.view;
+    view.dispatch({changes:{from:view.state.doc.length,insert:'中'.repeat(4000)}});
+    const edited = view.state.doc.toString();
+    reader.complete('data:image/png;base64,' + 'A'.repeat(4 * Math.ceil(size / 3)));
+    assert(view.state.doc.toString() === edited, '超限图片覆盖了读取期间的新输入');
+  });
+  await run('并发图片按完成时的最新文稿插入，不覆盖输入也不重复处理迟到回调', async () => {
+    await mount('L', 'prefix');
+    const first = imageEvent('drop', 'first.png');
+    const second = imageEvent('drop', 'second.png');
+    const view = ref.current.view;
+    view.dispatch({changes:{from:view.state.doc.length,insert:'-typed'}});
+    second.complete(); first.complete(); first.complete();
+    const value = view.state.doc.toString();
+    assert(value.startsWith('prefix-typed'), '并发图片覆盖了输入');
+    assert(value.indexOf('second.png') < value.indexOf('first.png'), '图片未使用最新的插入位置');
+    assert(value.split('first.png').length === 2 && value.split('second.png').length === 2, '迟到回调重复插入图片');
+  });
+  await run('读取期间切换到纯文本模式，旧图片回调不会插入错误标记', async () => {
+    await mount('M', 'Original', false, 'md');
+    const reader = imageEvent('paste');
+    await mount('M', 'Original', false, 'txt');
+    reader.complete();
+    assert(ref.current.view.state.doc.toString() === 'Original', '模式切换后仍插入图片标记');
+  });
+  root.unmount();
+  window.FileReader = originalReader;
+  document.getElementById('summary').textContent = `完成：${passed} 项通过，${failed} 项失败。`;
+  document.title = `${failed ? 'FAIL' : 'PASS'} — EasyMD 编辑器测试`;
+</script></body></html>

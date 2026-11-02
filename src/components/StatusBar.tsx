@@ -1,12 +1,15 @@
 import React from 'react';
 import { DocMode, DocStats } from '../types';
-import { CheckCircle2, ShieldCheck, Cloud } from 'lucide-react';
+import { CheckCircle2, ShieldCheck, HardDrive } from 'lucide-react';
 
 interface StatusBarProps {
   mode: DocMode;
   stats: DocStats;
   cursorPos: { line: number; col: number };
   isSaved: boolean;
+  saveError?: string | null;
+  onRetrySave?: () => void;
+  onReloadFile?: () => void;
   icloudStatus?: {
     isConnected: boolean;
     name: string;
@@ -19,6 +22,9 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   stats,
   cursorPos,
   isSaved,
+  saveError,
+  onRetrySave,
+  onReloadFile,
   icloudStatus,
 }) => {
   const getModeLabel = () => {
@@ -61,10 +67,10 @@ export const StatusBar: React.FC<StatusBarProps> = ({
             <span className="text-gray-300 dark:text-gray-700">|</span>
             <div
               className="flex items-center space-x-1 text-blue-600 dark:text-blue-400"
-              title="当前文稿与 macOS iCloud 云盘目录保持实时自动同步"
+              title="当前文稿自动写入配置好的 EasyMD 固定目录"
             >
-              <Cloud size={12} className={icloudStatus.isSyncing ? 'animate-bounce' : ''} />
-              <span className="hidden sm:inline font-medium">iCloud: {icloudStatus.name}</span>
+              <HardDrive size={12} className={icloudStatus.isSyncing ? 'animate-bounce' : ''} />
+              <span className="hidden sm:inline font-medium">文稿: {icloudStatus.name}</span>
             </div>
           </>
         )}
@@ -72,7 +78,13 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         <span className="text-gray-300 dark:text-gray-700">|</span>
 
         <div className="flex items-center space-x-1 text-emerald-600 dark:text-emerald-400">
-          {isSaved ? (
+          {saveError ? (
+            <span className="flex items-center gap-2 text-red-600 dark:text-red-400" title={saveError}>
+              <span role="alert">保存失败</span>
+              <button onClick={onRetrySave} className="underline">重试</button>
+              {onReloadFile && <button onClick={onReloadFile} className="underline">读取磁盘版本</button>}
+            </span>
+          ) : isSaved ? (
             <>
               <CheckCircle2 size={11} />
               <span className="hidden sm:inline">已自动保存</span>
@@ -87,7 +99,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
         <div
           className="hidden md:flex items-center space-x-0.5 text-gray-400"
-          title="纯本地离线处理，无任何数据上传，隐私安全"
+          title="文稿默认保存在本地；文稿中的外部图片、脚本等资源仍可能联网"
         >
           <ShieldCheck size={12} className="text-blue-500" />
           <span>本地沙箱</span>

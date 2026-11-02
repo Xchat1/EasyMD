@@ -17,8 +17,10 @@ import {
   PanelLeftOpen,
   Printer,
   Sparkles,
-  Cloud,
+  HardDrive,
   AppWindow,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 import { DocMode, ViewLayout, ThemeMode } from '../types';
 import { useDialog } from '../context/DialogContext';
@@ -26,6 +28,7 @@ import { useDialog } from '../context/DialogContext';
 interface MacTitleBarProps {
   title: string;
   setTitle: (title: string) => void;
+  isTitleReadOnly?: boolean;
   mode: DocMode;
   setMode: (mode: DocMode) => void;
   layout: ViewLayout;
@@ -50,6 +53,7 @@ interface MacTitleBarProps {
 export const MacTitleBar: React.FC<MacTitleBarProps> = ({
   title,
   setTitle,
+  isTitleReadOnly = false,
   mode,
   setMode,
   layout,
@@ -136,59 +140,12 @@ export const MacTitleBar: React.FC<MacTitleBarProps> = ({
 
   return (
     <header className="h-12 border-b border-black/[0.08] dark:border-white/[0.1] bg-[#f6f6f7]/90 dark:bg-[#202022]/90 backdrop-blur-xl flex items-center justify-between px-3.5 select-none z-30 transition-colors relative">
-      {/* Left: Mac Traffic Lights & Sidebar Toggle */}
-      <div className="flex items-center space-x-3 w-56 flex-shrink-0">
-        <div className="flex items-center space-x-2 group">
-          {/* Red button */}
-          <button
-            onClick={async () => {
-              const ok = await confirm({
-                title: '清空并重置当前文档',
-                message: '确认清空当前正在编辑的文档并新建未命名文档吗？\n未保存的内容将会丢失。',
-                confirmText: '清空重置',
-                isDestructive: true,
-                icon: 'reset',
-              });
-              if (ok) {
-                setTitle('未命名文档.md');
-                toast.info('已重置文档');
-              }
-            }}
-            title="关闭 / 重置"
-            className="w-3 h-3 rounded-full bg-[#ff5f56] border border-[#e0443e] flex items-center justify-center text-[8px] text-black/60 opacity-90 group-hover:opacity-100 hover:brightness-95 transition-all shadow-sm"
-          >
-            <span className="opacity-0 group-hover:opacity-100 font-bold leading-none">×</span>
-          </button>
-          {/* Yellow button */}
-          <button
-            onClick={() => {
-              const elem = document.getElementById('root');
-              if (elem) {
-                elem.classList.add('scale-95', 'opacity-60');
-                setTimeout(() => elem.classList.remove('scale-95', 'opacity-60'), 250);
-              }
-            }}
-            title="最小化动画测试"
-            className="w-3 h-3 rounded-full bg-[#ffbd2e] border border-[#dea123] flex items-center justify-center text-[8px] text-black/60 opacity-90 group-hover:opacity-100 hover:brightness-95 transition-all shadow-sm"
-          >
-            <span className="opacity-0 group-hover:opacity-100 font-bold leading-none">-</span>
-          </button>
-          {/* Green button: Fullscreen */}
-          <button
-            onClick={toggleFullscreen}
-            title={isFullscreen ? '退出全屏' : '进入全屏'}
-            className="w-3 h-3 rounded-full bg-[#27c93f] border border-[#1aab29] flex items-center justify-center text-[8px] text-black/60 opacity-90 group-hover:opacity-100 hover:brightness-95 transition-all shadow-sm"
-          >
-            <span className="opacity-0 group-hover:opacity-100 text-[6px] font-bold leading-none">
-              {isFullscreen ? '⤡' : '⤢'}
-            </span>
-          </button>
-        </div>
-
+      {/* Native window controls belong to macOS/Chrome, not the document toolbar. */}
+      <div className="flex items-center space-x-2 w-32 flex-shrink-0">
         <button
           onClick={() => setIsSidebarOpen((prev) => !prev)}
           title="切换侧边栏目录 (⌘+\)"
-          className="p-1 rounded-md text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors ml-2"
+          className="p-1 rounded-md text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
         >
           {isSidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
         </button>
@@ -246,9 +203,10 @@ export const MacTitleBar: React.FC<MacTitleBarProps> = ({
           <input
             type="text"
             value={title}
+            readOnly={isTitleReadOnly}
             onChange={(e) => setTitle(e.target.value)}
             className="w-full text-xs font-medium text-center bg-transparent hover:bg-black/5 dark:hover:bg-white/5 focus:bg-white dark:focus:bg-[#2d2d30] border border-transparent focus:border-blue-500/50 rounded px-2 py-0.5 text-gray-800 dark:text-gray-200 focus:outline-none transition-colors truncate"
-            title="点击修改文档标题"
+            title={isTitleReadOnly ? '标题当前只读；已连接文件请在目录中重命名' : '点击修改文档标题'}
           />
           {isModified && (
             <span
@@ -261,6 +219,14 @@ export const MacTitleBar: React.FC<MacTitleBarProps> = ({
 
       {/* Right: Layout Switchers & Actions */}
       <div className="flex items-center space-x-1.5 justify-end flex-shrink-0">
+        <button
+          onClick={toggleFullscreen}
+          title={isFullscreen ? '退出全屏' : '进入全屏'}
+          aria-label={isFullscreen ? '退出全屏' : '进入全屏'}
+          className="p-1.5 rounded-md text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+        >
+          {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+        </button>
         {/* Install as Mac Standalone App */}
         {!isInstalled && (
           <button
@@ -319,9 +285,9 @@ export const MacTitleBar: React.FC<MacTitleBarProps> = ({
               ? 'text-blue-600 dark:text-blue-400 bg-blue-500/10 hover:bg-blue-500/20'
               : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-black/5 dark:hover:bg-white/10'
           }`}
-          title={isICloudConnected ? `iCloud 云盘已同步: ${icloudDirName}` : '配置 macOS iCloud 文稿目录同步'}
+          title={isICloudConnected ? `固定文稿目录: ${icloudDirName}` : '查看固定文稿目录'}
         >
-          <Cloud size={15} />
+          <HardDrive size={15} />
         </button>
 
         {/* Open local file */}

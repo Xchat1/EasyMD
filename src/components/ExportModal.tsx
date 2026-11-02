@@ -13,12 +13,13 @@ import {
   FileDown,
 } from 'lucide-react';
 import { DocMode } from '../types';
+import { useDialog } from '../context/DialogContext';
 import {
   downloadFile,
-  copyRichTextToClipboard,
-  generateStandaloneHtml,
+  copyDocumentRichText,
+  exportDocumentHtml,
+  printDocument,
 } from '../utils/fileSystem';
-import { renderMarkdown } from '../utils/markdown';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -26,6 +27,8 @@ interface ExportModalProps {
   title: string;
   content: string;
   mode: DocMode;
+  allowNetwork?: boolean;
+  networkSignal?: AbortSignal;
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({
@@ -34,10 +37,19 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   title,
   content,
   mode,
+  allowNetwork = false,
+  networkSignal,
 }) => {
+  const { toast } = useDialog();
   const [successAction, setSuccessAction] = useState<string | null>(null);
 
   if (!isOpen) return null;
+
+  const performAction = async (action: () => void | Promise<void>) => {
+    try { await action(); } catch (error) {
+      toast.error(`导出失败：${error instanceof Error ? error.message : '请重试'}`);
+    }
+  };
 
   const baseName = title.replace(/\.[^/.]+$/, '') || 'EasyMD-文档';
 
@@ -56,21 +68,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   // 2. Export as Standalone HTML (.html)
   const handleExportHtml = async () => {
-    let body = content;
-    if (mode === 'md') {
-      body = await renderMarkdown(content);
-    }
-    const html = generateStandaloneHtml(title, body, mode === 'h5');
+    const html = await exportDocumentHtml(title, content, mode, allowNetwork);
     downloadFile(html, `${baseName}.html`, 'text/html;charset=utf-8');
     showSuccessFeedback('html');
   };
 
   // 3. Export as PDF (.pdf)
-  const handleExportPdf = () => {
-    showSuccessFeedback('pdf');
-    setTimeout(() => {
-      window.print();
-    }, 150);
+  const handleExportPdf = async () => {
+    await printDocument(title, content, mode, allowNetwork, networkSignal);
   };
 
   // 4. Export as Plain Text (.txt)
@@ -81,13 +86,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   // 5. Copy Rich Text for WeChat / Lark / DingTalk / Mail
   const handleCopyRichText = async () => {
-    let rendered = content;
-    if (mode === 'md') {
-      rendered = await renderMarkdown(content);
-    }
-    const success = await copyRichTextToClipboard(rendered, content);
+    const success = await copyDocumentRichText(content, mode, allowNetwork);
     if (success) {
       showSuccessFeedback('copy-rich');
+    } else {
+      toast.error('无法复制富文本，请检查浏览器剪贴板权限，或使用“复制文档源码”。');
     }
   };
 
@@ -204,6 +207,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto mac-scrollbar">
+          {mode === 'h5' && <p className="text-xs text-amber-700 dark:text-amber-400">
+            HTML 文件导出保留原始源码；单独打开后，其中的脚本和外部资源可以运行。本应用的预览授权只约束应用内预览、打印与复制。
+          </p>}
           {/* Section 1: File Exports (Unified 2x2 Grid) */}
           <div>
             <div className="flex items-center justify-between mb-3">
@@ -252,7 +258,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
                     {/* Unified Action Button */}
                     <button
-                      onClick={item.onClick}
+                      onClick={() => { void performAction(item.onClick); }}
                       className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all active:scale-95 flex-shrink-0 shadow-sm border ${
                         isSuccess
                           ? 'bg-emerald-600 border-emerald-600 text-white'
@@ -320,7 +326,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
                     {/* Unified Action Button */}
                     <button
-                      onClick={item.onClick}
+                      onClick={() => { void performAction(item.onClick); }}
                       className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all active:scale-95 flex-shrink-0 shadow-sm border ${
                         isSuccess
                           ? 'bg-emerald-600 border-emerald-600 text-white'

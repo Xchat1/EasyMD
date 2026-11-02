@@ -116,7 +116,7 @@ export const EditorToolbar: React.FC<EditorToolbarProps> = ({ mode, onInsertText
               <Link2 size={14} />
             </button>
             <button
-              onClick={() => onInsertText('![', '](https://images.unsplash.com/photo-1517842645767-c639042777db?w=600)', '图片描述')}
+              onClick={() => onInsertText('![', '](图片地址)', '图片描述')}
               className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/10 text-gray-700 dark:text-gray-300"
               title="图片链接"
             >

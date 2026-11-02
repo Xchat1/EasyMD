@@ -1,6 +1,6 @@
 /**
  * iCloud / Local Document Directory Sync via File System Access API
- * Supported on macOS Chrome, Edge, and modern WebKit browsers.
+ * Requires a browser that supports showDirectoryPicker (such as Chrome/Edge).
  * Directly maps to ~/Library/Mobile Documents/com~apple~CloudDocs/ (iCloud Drive)
  */
 
@@ -118,7 +118,7 @@ export async function verifyPermission(
         return true;
       }
     }
-    return true;
+    return false;
   } catch (err) {
     console.warn('Permission query/request error:', err);
     return false;
@@ -170,7 +170,7 @@ export async function listDirectoryTree(
   currentPath: string = '',
   depth: number = 0
 ): Promise<ICloudNode[]> {
-  if (depth > 6) return []; // safety limit
+  if (depth >= 16) return []; // Match the fixed-directory service depth limit.
   const nodes: ICloudNode[] = [];
 
   try {
@@ -275,6 +275,7 @@ export async function writeICloudFileContent(
   fileHandle: FileSystemFileHandle,
   content: string
 ): Promise<boolean> {
+  let writable: FileSystemWritableFileStream | undefined;
   try {
     const hasPermission = await verifyPermission(fileHandle, true);
     if (!hasPermission) return false;
@@ -282,35 +283,55 @@ export async function writeICloudFileContent(
     const handleWithCreate = fileHandle as unknown as {
       createWritable: () => Promise<FileSystemWritableFileStream>;
     };
-    const writable = await handleWithCreate.createWritable();
+    writable = await handleWithCreate.createWritable();
     await writable.write(content);
     await writable.close();
     return true;
   } catch (err) {
-    console.error('Error writing to iCloud file:', err);
-    return false;
+    try { await writable?.abort(); } catch { /* Preserve the original write error. */ }
+    console.error('Error writing document file:', err);
+    throw err;
   }
 }
 
 // Create new file inside iCloud directory or subdirectory
+export function validateEntryName(name: string): void {
+  if (!name.trim() || name === '.' || name === '..' || /[/\\\0]/.test(name)) {
+    throw new Error('文件名称不能为空，且不能包含 /、\\、空字符或使用 .、..');
+  }
+}
+
+async function requireUnusedName(parent: FileSystemDirectoryHandle, name: string): Promise<void> {
+  try {
+    await parent.getFileHandle(name);
+  } catch (error) {
+    if ((error as Error).name === 'NotFoundError') return;
+    if ((error as Error).name !== 'TypeMismatchError') throw error;
+  }
+  throw new Error(`已存在同名文件或文件夹：${name}`);
+}
+
 export async function createICloudFile(
   targetDirHandle: FileSystemDirectoryHandle,
   fileName: string,
   initialContent: string
 ): Promise<FileSystemFileHandle | null> {
+  let writable: FileSystemWritableFileStream | undefined;
   try {
+    validateEntryName(fileName);
     const hasPermission = await verifyPermission(targetDirHandle, true);
     if (!hasPermission) return null;
-
+    await requireUnusedName(targetDirHandle, fileName);
     const fileHandle = await targetDirHandle.getFileHandle(fileName, { create: true });
     const handleWithCreate = fileHandle as unknown as {
       createWritable: () => Promise<FileSystemWritableFileStream>;
     };
-    const writable = await handleWithCreate.createWritable();
+    writable = await handleWithCreate.createWritable();
     await writable.write(initialContent);
     await writable.close();
     return fileHandle;
   } catch (err) {
+    try { await writable?.abort(); } catch { /* The source of a failed rename remains intact. */ }
     console.error('Error creating file in iCloud directory:', err);
     return null;
   }
@@ -322,9 +343,10 @@ export async function createICloudDirectory(
   folderName: string
 ): Promise<FileSystemDirectoryHandle | null> {
   try {
+    validateEntryName(folderName);
     const hasPermission = await verifyPermission(parentDirHandle, true);
     if (!hasPermission) return null;
-
+    await requireUnusedName(parentDirHandle, folderName);
     return await parentDirHandle.getDirectoryHandle(folderName, { create: true });
   } catch (err) {
     console.error('Error creating directory in iCloud:', err);
@@ -333,15 +355,29 @@ export async function createICloudDirectory(
 }
 
 // Rename file or folder in iCloud
+export interface RenamedICloudEntry {
+  handle: FileSystemFileHandle | FileSystemDirectoryHandle;
+  name: string;
+}
+
 export async function renameICloudEntry(
   parentDirHandle: FileSystemDirectoryHandle,
   oldName: string,
   newName: string,
   isDirectory: boolean
-): Promise<boolean> {
+): Promise<RenamedICloudEntry | null> {
   try {
+    validateEntryName(oldName);
+    validateEntryName(newName);
     const hasPermission = await verifyPermission(parentDirHandle, true);
-    if (!hasPermission) return false;
+    if (!hasPermission) return null;
+    if (oldName === newName) {
+      const handle = isDirectory
+        ? await parentDirHandle.getDirectoryHandle(oldName)
+        : await parentDirHandle.getFileHandle(oldName);
+      return { handle, name: newName };
+    }
+    await requireUnusedName(parentDirHandle, newName);
 
     // Check if browser supports handle.move()
     if (isDirectory) {
@@ -351,7 +387,7 @@ export async function renameICloudEntry(
       };
       if (typeof handleWithMove.move === 'function') {
         await handleWithMove.move(newName);
-        return true;
+        return { handle: await parentDirHandle.getDirectoryHandle(newName), name: newName };
       }
     } else {
       const fileHandle = await parentDirHandle.getFileHandle(oldName);
@@ -359,21 +395,31 @@ export async function renameICloudEntry(
         move?: (name: string) => Promise<void>;
       };
       if (typeof handleWithMove.move === 'function') {
-        await handleWithMove.move(newName);
-        return true;
+        try {
+          await handleWithMove.move(newName);
+          return { handle: await parentDirHandle.getFileHandle(newName), name: newName };
+        } catch (error) {
+          // Some browsers expose move() but do not implement it for user files.
+          if ((error as Error).name !== 'NotSupportedError') throw error;
+        }
       }
 
       // Fallback for file renaming: copy content to new file and delete old
       const content = await readICloudFileContent(fileHandle);
-      await createICloudFile(parentDirHandle, newName, content);
+      const renamedHandle = await createICloudFile(parentDirHandle, newName, content);
+      if (!renamedHandle) return null;
+      // Do not delete a source that another app changed while its copy was made.
+      if (await readICloudFileContent(fileHandle) !== content) {
+        throw new Error('原文件在重命名期间被修改，已保留原文件和副本');
+      }
       await parentDirHandle.removeEntry(oldName);
-      return true;
+      return { handle: renamedHandle, name: newName };
     }
 
-    return false;
+    return null;
   } catch (err) {
     console.error(`Error renaming ${oldName} to ${newName}:`, err);
-    return false;
+    return null;
   }
 }
 

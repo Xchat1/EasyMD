@@ -20,20 +20,21 @@ import {
   ICloudDirState,
 } from './types';
 import { TEMPLATES } from './utils/templates';
-import { extractToc, calculateDocStats, renderMarkdown } from './utils/markdown';
-import { openLocalFile, downloadFile, generateStandaloneHtml, copyRichTextToClipboard } from './utils/fileSystem';
+import { extractToc, calculateDocStats } from './utils/markdown';
+import { openLocalFile, downloadFile, exportDocumentHtml, printDocument, copyDocumentRichText } from './utils/fileSystem';
+import { parseDocuments, parseFolders, serializeDocuments, removeFolderTree } from './utils/documents';
+import { connectDesktopWorkspace, restoreDesktopDocuments, desktopBinding } from './utils/desktopWorkspace';
+import { FileSaveQueue } from './utils/fileSaveQueue';
+import { useWorkspaceLock } from './hooks/useWorkspaceLock';
 import {
-  chooseICloudDirectory,
   listDirectoryTree,
   flattenICloudTree,
   readICloudFileContent,
-  writeICloudFileContent,
   createICloudFile,
   createICloudDirectory,
   renameICloudEntry,
   deleteICloudEntry,
-  getStoredDirectoryHandle,
-  clearStoredDirectoryHandle,
+  detectFileMode,
   ICloudNode,
 } from './utils/icloudSync';
 import { useDialog } from './context/DialogContext';
@@ -45,16 +46,25 @@ const STORAGE_KEY_SETTINGS = 'easymd_settings_v1';
 const STORAGE_KEY_THEME = 'easymd_theme_v1';
 const STORAGE_KEY_SIDEBAR_WIDTH = 'easymd_sidebar_width_v1';
 
+function readStoredPreference(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
 export function App() {
   const { confirm, prompt, toast } = useDialog();
+  const workspace = useWorkspaceLock();
+  // Fresh browser profiles must open an existing workspace instead of importing
+  // the built-in examples over and over after an uninstall or data reset.
+  const initialExamplesRef = useRef(readStoredPreference(STORAGE_KEY_DOCS) === null);
+  const writableRef = useRef(workspace.isWritable);
+  writableRef.current = workspace.isWritable;
 
   // 1. Folders State
   const [folders, setFolders] = useState<FolderItem[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_FOLDERS);
       if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        return parseFolders(saved);
       }
     } catch (e) {
       console.warn('Failed to parse saved folders from localStorage', e);
@@ -70,8 +80,8 @@ export function App() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_DOCS);
       if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        const parsed = parseDocuments(saved);
+        if (parsed.length > 0) return parsed;
       }
     } catch (e) {
       console.warn('Failed to parse saved documents from localStorage', e);
@@ -109,7 +119,7 @@ export function App() {
   });
 
   const [currentDocId, setCurrentDocId] = useState<string>(() => {
-    return localStorage.getItem(STORAGE_KEY_CURRENT_ID) || 'doc-md-welcome';
+    return readStoredPreference(STORAGE_KEY_CURRENT_ID) || 'doc-md-welcome';
   });
 
   // Current document fallback
@@ -129,8 +139,11 @@ export function App() {
   // Layout & Theme State
   const [layout, setLayout] = useState<ViewLayout>('split');
   const [theme, setTheme] = useState<ThemeMode>(() => {
-    return (localStorage.getItem(STORAGE_KEY_THEME) as ThemeMode) || 'light';
+    const saved = readStoredPreference(STORAGE_KEY_THEME);
+    return saved === 'dark' || saved === 'system' ? saved : 'light';
   });
+  const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const effectiveTheme = theme === 'system' ? (systemDark ? 'dark' : 'light') : theme;
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(true);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     try {
@@ -149,7 +162,38 @@ export function App() {
   const [isDraggingSplit, setIsDraggingSplit] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [cursorPos, setCursorPos] = useState<{ line: number; col: number }>({ line: 1, col: 1 });
-  const [isSaved, setIsSaved] = useState<boolean>(true);
+  const [localSaveError, setLocalSaveError] = useState<string | null>(null);
+  const [syncStates, setSyncStates] = useState<Record<string, { status: string; error?: Error }>>({});
+  const [handlesRestored, setHandlesRestored] = useState(false);
+  const readyRef = useRef(false);
+  readyRef.current = handlesRestored;
+  const [workspaceDirectory, setWorkspaceDirectory] = useState('文稿/EasyMD');
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const desktopRestoreRef = useRef<Promise<Awaited<ReturnType<typeof connectDesktopWorkspace>> & { documents: DocumentItem[] }> | null>(null);
+  const [isFileOperation, setIsFileOperation] = useState(false);
+  const fileOperationRef = useRef(false);
+  const documentsRef = useRef(documents);
+  documentsRef.current = documents;
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
+  const saveQueueRef = useRef<FileSaveQueue | null>(null);
+  if (!saveQueueRef.current) {
+    saveQueueRef.current = new FileSaveQueue({
+      onStatus: (event) => {
+        setSyncStates((prev) => ({ ...prev, [event.id]: event }));
+        if (event.status === 'saved') {
+          setDocuments((prev) => prev.map((doc) => doc.id === event.id ? {
+            ...doc, lastSyncedContent: event.content, isModified: doc.content !== event.content,
+          } : doc));
+        } else if (event.status === 'error') {
+          toastRef.current.error(`磁盘保存失败，草稿已保留：${event.error?.message || '请检查目录权限'}`, 6000);
+        }
+      },
+    });
+  }
+  const saveQueue = saveQueueRef.current;
+  const saveError = localSaveError || syncStates[currentDoc.id]?.error?.message;
+  const isSaved = !saveError && (!currentDoc.isICloudFile || !currentDoc.isModified);
 
   // Settings State
   const [settings, setSettings] = useState<EditorSettings>(() => {
@@ -171,6 +215,39 @@ export function App() {
 
   // Modals
   const [isExportOpen, setIsExportOpen] = useState<boolean>(false);
+  const [networkAllowedDocs, setNetworkAllowedDocs] = useState<Set<string>>(() => new Set());
+  const networkControllers = useRef(new Map<string, AbortController>());
+  const allowNetwork = networkAllowedDocs.has(currentDoc.id);
+  const networkSignal = networkControllers.current.get(currentDoc.id)?.signal;
+  useEffect(() => {
+    const revokeAll = () => {
+      for (const controller of networkControllers.current.values()) controller.abort();
+      networkControllers.current.clear();
+    };
+    window.addEventListener('pagehide', revokeAll);
+    return () => { window.removeEventListener('pagehide', revokeAll); revokeAll(); };
+  }, []);
+  useEffect(() => {
+    const ids = new Set(documents.map((doc) => doc.id));
+    for (const [id, controller] of networkControllers.current) {
+      if (!ids.has(id)) { controller.abort(); networkControllers.current.delete(id); }
+    }
+  }, [documents]);
+  const handleToggleNetwork = async () => {
+    const id = currentDoc.id;
+    if (networkAllowedDocs.has(id)) {
+      networkControllers.current.get(id)?.abort();
+      networkControllers.current.delete(id);
+      setNetworkAllowedDocs((previous) => { const next = new Set(previous); next.delete(id); return next; });
+      return;
+    }
+    if (!await confirm({ title: '允许此文稿联网？',
+      message: `“${currentDoc.title}”中的外部资源会访问对应网站，暴露网络地址；HTML 脚本也会运行，并可发送此文稿的内容。请只允许可信文稿。授权仅在本次打开应用期间有效。`,
+      confirmText: '信任并允许', icon: 'warning' })) return;
+    if (!documentsRef.current.some((doc) => doc.id === id)) return;
+    networkControllers.current.set(id, new AbortController());
+    setNetworkAllowedDocs((previous) => new Set(previous).add(id));
+  };
   const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [isICloudGuideOpen, setIsICloudGuideOpen] = useState<boolean>(false);
@@ -184,86 +261,131 @@ export function App() {
     filesCount: 0,
   });
   const [icloudTree, setIcloudTree] = useState<ICloudNode[]>([]);
+  const mountedRootRef = useRef<FileSystemDirectoryHandle | null>(null);
 
   // Refs
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const previewRef = useRef<HTMLDivElement>(null);
 
-  // Restore stored iCloud directory on initial mount
-  useEffect(() => {
-    let isMounted = true;
-    getStoredDirectoryHandle().then(async (handle) => {
-      if (handle && isMounted) {
-        try {
-          const tree = await listDirectoryTree(handle);
-          const files = flattenICloudTree(tree);
-          if (isMounted) {
-            setIcloudDir({
-              handle,
-              name: handle.name || 'iCloud 云盘',
-              isSyncing: false,
-              lastSyncedAt: Date.now(),
-              filesCount: files.length,
-            });
-            setIcloudTree(tree);
-          }
-        } catch (err) {
-          console.warn('Could not auto-list stored directory files:', err);
-        }
+  const prepareDesktopWorkspace = async () => {
+    const connection = await connectDesktopWorkspace();
+    if (initialExamplesRef.current) {
+      const existing = flattenICloudTree(await listDirectoryTree(connection.root))[0];
+      if (existing) {
+        const content = await readICloudFileContent(existing.handle);
+        const doc: DocumentItem = {
+          ...desktopBinding(existing.handle), id: crypto.randomUUID(), title: existing.name,
+          content, mode: existing.mode, updatedAt: Date.now(), isModified: false,
+          fileHandle: existing.handle, isICloudFile: true, path: existing.path,
+          lastSyncedContent: content,
+        };
+        initialExamplesRef.current = false;
+        return { ...connection, documents: [doc] };
       }
+    }
+    const restored = await restoreDesktopDocuments(connection.root, connection.workspaceId, documentsRef.current, folders);
+    initialExamplesRef.current = false;
+    return { ...connection, documents: restored };
+  };
+
+  const applyDesktopWorkspace = async (connection: Awaited<ReturnType<typeof prepareDesktopWorkspace>>) => {
+    mountedRootRef.current = connection.root;
+    setWorkspaceDirectory(connection.directory);
+    saveQueue.cancel();
+    for (const doc of connection.documents) {
+      if (doc.fileHandle && doc.lastSyncedContent !== undefined) saveQueue.bind(doc.id, doc.fileHandle, doc.lastSyncedContent);
+    }
+    setDocuments(connection.documents);
+    setHandlesRestored(true);
+    const tree = await listDirectoryTree(connection.root);
+    setIcloudDir({ handle: connection.root, name: 'EasyMD', isSyncing: false, lastSyncedAt: null, filesCount: flattenICloudTree(tree).length });
+    setIcloudTree(tree);
+    setWorkspaceError(null);
+  };
+
+  // The desktop service owns one fixed directory. StrictMode reuses the same migration.
+  useEffect(() => {
+    if (!workspace.isWritable) return;
+    let active = true;
+    desktopRestoreRef.current ||= prepareDesktopWorkspace();
+    void desktopRestoreRef.current.then(async (connection) => {
+      if (active) await applyDesktopWorkspace(connection);
+    }).catch((error) => {
+      if (!active) return;
+      desktopRestoreRef.current = null;
+      setHandlesRestored(true);
+      setWorkspaceError((error as Error).message || '无法连接固定文稿目录');
     });
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+    return () => { active = false; };
+  }, [workspace.isWritable]);
 
   // Theme synchronization with HTML element
   useEffect(() => {
-    const root = document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const updateTheme = () => {
+      setSystemDark(media.matches);
+      document.documentElement.classList.toggle('dark', theme === 'dark' || (theme === 'system' && media.matches));
+    };
+    updateTheme();
+    media.addEventListener('change', updateTheme);
+    if (workspace.isWritable) {
+      try { localStorage.setItem(STORAGE_KEY_THEME, theme); } catch { /* draft errors are shown separately */ }
     }
-    localStorage.setItem(STORAGE_KEY_THEME, theme);
-  }, [theme]);
+    return () => media.removeEventListener('change', updateTheme);
+  }, [theme, workspace.isWritable]);
 
   // Settings & Folders persistence
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
-  }, [settings]);
+    if (!workspace.isWritable) return;
+    try { localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings)); }
+    catch { toastRef.current.error('偏好设置未能保存，本地存储可能已满'); }
+  }, [settings, workspace.isWritable]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_FOLDERS, JSON.stringify(folders));
-  }, [folders]);
+    if (!workspace.isWritable) return;
+    try { localStorage.setItem(STORAGE_KEY_FOLDERS, JSON.stringify(folders)); }
+    catch { toastRef.current.error('目录结构未能保存，请导出文稿备份'); }
+  }, [folders, workspace.isWritable]);
 
-  // Save documents to localStorage and sync to iCloud if active (debounced)
+  // Persist drafts immediately. Disk writes use independent queues for every document.
   useEffect(() => {
-    setIsSaved(false);
-    const timer = setTimeout(async () => {
-      try {
-        localStorage.setItem(STORAGE_KEY_DOCS, JSON.stringify(documents));
-        localStorage.setItem(STORAGE_KEY_CURRENT_ID, currentDocId);
-
-        // If current document is linked to iCloud file handle, sync directly to disk!
-        if (currentDoc.isICloudFile && currentDoc.fileHandle) {
-          setIcloudDir((s) => ({ ...s, isSyncing: true }));
-          await writeICloudFileContent(currentDoc.fileHandle, currentDoc.content);
-          setIcloudDir((s) => ({ ...s, isSyncing: false, lastSyncedAt: Date.now() }));
-        }
-
-        setIsSaved(true);
-      } catch (e) {
-        console.error('Failed to save to storage', e);
+    if (!workspace.isWritable) return;
+    try {
+      localStorage.setItem(STORAGE_KEY_DOCS, serializeDocuments(documents));
+      localStorage.setItem(STORAGE_KEY_CURRENT_ID, currentDocId);
+      setLocalSaveError(null);
+    } catch {
+      setLocalSaveError('本地存储已满或不可用，请立即导出备份');
+    }
+    if (!handlesRestored) return;
+    for (const doc of documents) {
+      if (doc.isICloudFile && doc.fileHandle && doc.isModified && saveQueue.isBound(doc.id)) {
+        saveQueue.schedule(doc.id, doc.content);
       }
-    }, 400);
+    }
+  }, [documents, currentDocId, handlesRestored, saveQueue, workspace.isWritable]);
 
-    return () => clearTimeout(timer);
-  }, [documents, currentDocId, currentDoc.content, currentDoc.fileHandle, currentDoc.isICloudFile]);
+  useEffect(() => {
+    if (!workspace.isWritable) return;
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (localSaveError || documentsRef.current.some((doc) => doc.isICloudFile && doc.isModified)) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    };
+    const flush = () => { if (document.visibilityState === 'hidden') void saveQueue.flush(); };
+    window.addEventListener('beforeunload', beforeUnload);
+    document.addEventListener('visibilitychange', flush);
+    return () => {
+      window.removeEventListener('beforeunload', beforeUnload);
+      document.removeEventListener('visibilitychange', flush);
+    };
+  }, [localSaveError, saveQueue, workspace.isWritable]);
 
   // Document Content Change handler
   const handleContentChange = useCallback(
     (newContent: string) => {
+      if (fileOperationRef.current || !writableRef.current || !readyRef.current) return;
       setDocuments((prevDocs) =>
         prevDocs.map((doc) =>
           doc.id === currentDoc.id
@@ -278,6 +400,7 @@ export function App() {
   // Document Title Change handler
   const handleTitleChange = useCallback(
     (newTitle: string) => {
+      if (currentDoc.isICloudFile || fileOperationRef.current || !writableRef.current || !readyRef.current) return;
       setDocuments((prevDocs) =>
         prevDocs.map((doc) =>
           doc.id === currentDoc.id
@@ -286,25 +409,22 @@ export function App() {
         )
       );
     },
-    [currentDoc.id]
+    [currentDoc.id, currentDoc.isICloudFile]
   );
 
   // Document Mode Change handler
   const handleModeChange = useCallback(
     (newMode: DocMode) => {
+      if (fileOperationRef.current || !writableRef.current || !readyRef.current) return;
       setDocuments((prevDocs) =>
         prevDocs.map((doc) => {
           if (doc.id === currentDoc.id) {
             let updatedTitle = doc.title;
-            // update extension if default
-            if (doc.title.endsWith('.md') && newMode === 'h5') {
-              updatedTitle = doc.title.replace(/\.md$/, '.html');
-            } else if (doc.title.endsWith('.html') && newMode === 'md') {
-              updatedTitle = doc.title.replace(/\.html$/, '.md');
-            } else if (newMode === 'txt' && !doc.title.endsWith('.txt')) {
-              updatedTitle = doc.title.replace(/\.[^/.]+$/, '') + '.txt';
-            }
-            return { ...doc, mode: newMode, title: updatedTitle, updatedAt: Date.now() };
+            // Switching modes updates known document extensions in both directions.
+            const extension = newMode === 'h5' ? 'html' : newMode;
+            const base = doc.title.replace(/\.(?:md|markdown|html?|txt|log)$/i, '');
+            updatedTitle = `${base}.${extension}`;
+            return { ...doc, mode: newMode, title: doc.isICloudFile ? doc.title : updatedTitle, updatedAt: Date.now() };
           }
           return doc;
         })
@@ -315,14 +435,15 @@ export function App() {
 
   // New Document handler (supports folder placement)
   const handleNewDoc = (targetMode: DocMode, folderId?: string | null) => {
-    const template = TEMPLATES[targetMode];
-    const newId = `doc-${Date.now()}`;
+    if (fileOperationRef.current || !writableRef.current || !handlesRestored) return;
+    if (mountedRootRef.current) { void handleCreateICloudFileInDir(mountedRootRef.current, targetMode); return; }
+    const newId = crypto.randomUUID();
     const newDoc: DocumentItem = {
       id: newId,
       title: `未命名-${new Date().toLocaleTimeString('zh-CN', { hour12: false })}.${
         targetMode === 'md' ? 'md' : targetMode === 'h5' ? 'html' : 'txt'
       }`,
-      content: template.content,
+      content: '',
       mode: targetMode,
       folderId: folderId || null,
       updatedAt: Date.now(),
@@ -334,8 +455,20 @@ export function App() {
   };
 
   // Rename Document handler
-  const handleRenameDoc = (docId: string, newTitle: string) => {
+  const handleRenameDoc = async (docId: string, newTitle: string) => {
+    if (!writableRef.current || fileOperationRef.current || !readyRef.current) return;
     if (!newTitle.trim()) return;
+    const doc = documentsRef.current.find((item) => item.id === docId);
+    if (doc?.isICloudFile && doc.fileHandle && mountedRootRef.current) {
+      try {
+        const path = await mountedRootRef.current.resolve(doc.fileHandle);
+        if (!path?.length) throw new Error('文件不在当前目录中');
+        let parent = mountedRootRef.current;
+        for (const part of path.slice(0, -1)) parent = await parent.getDirectoryHandle(part);
+        await handleRenameICloudEntry(parent, path[path.length - 1], newTitle, false);
+      } catch (error) { toast.error((error as Error).message); }
+      return;
+    }
     setDocuments((prev) =>
       prev.map((d) => (d.id === docId ? { ...d, title: newTitle.trim(), updatedAt: Date.now() } : d))
     );
@@ -343,6 +476,8 @@ export function App() {
 
   // Create Folder handler
   const handleNewFolder = async (parentId?: string | null) => {
+    if (!writableRef.current || fileOperationRef.current || !readyRef.current) return;
+    if (mountedRootRef.current && !parentId) { await handleCreateICloudSubDir(mountedRootRef.current); return; }
     const name = await prompt({
       title: '新建文件夹',
       message: '请输入新文件夹名称：',
@@ -353,7 +488,7 @@ export function App() {
     });
     if (!name || !name.trim()) return;
     const newFolder: FolderItem = {
-      id: `folder-${Date.now()}`,
+      id: crypto.randomUUID(),
       name: name.trim(),
       parentId: parentId || null,
       isExpanded: true,
@@ -365,6 +500,7 @@ export function App() {
 
   // Rename Folder handler
   const handleRenameFolder = (folderId: string, newName: string) => {
+    if (!writableRef.current || fileOperationRef.current || !readyRef.current) return;
     if (!newName.trim()) return;
     setFolders((prev) =>
       prev.map((f) => (f.id === folderId ? { ...f, name: newName.trim() } : f))
@@ -373,10 +509,10 @@ export function App() {
 
   // Delete Folder handler
   const handleDeleteFolder = (folderId: string) => {
-    setFolders((prev) => prev.filter((f) => f.id !== folderId && f.parentId !== folderId));
-    setDocuments((prev) =>
-      prev.map((d) => (d.folderId === folderId ? { ...d, folderId: null } : d))
-    );
+    if (!writableRef.current || fileOperationRef.current || !readyRef.current) return;
+    const remaining = removeFolderTree(folders, documentsRef.current, folderId);
+    setFolders(remaining.folders);
+    setDocuments(remaining.documents);
     toast.info('文件夹已删除，内部文稿已移至根目录');
   };
 
@@ -390,31 +526,35 @@ export function App() {
   };
 
   // Delete Document handler
-  const handleDeleteDoc = (id: string) => {
-    if (documents.length <= 1) {
+  const handleDeleteDoc = (id: string) => withFileOperation(async () => {
+    if (documentsRef.current.length <= 1) {
       toast.warning('至少需要保留一个工作文档');
       return;
     }
-    const filtered = documents.filter((d) => d.id !== id);
+    if (!await saveQueue.flush(id)) {
+      toast.error('该文稿尚未成功同步，请先重试或导出备份');
+      return;
+    }
+    saveQueue.cancel(id);
+    const filtered = documentsRef.current.filter((d) => d.id !== id);
+    if (!filtered.length) return;
     setDocuments(filtered);
     if (currentDocId === id) {
       setCurrentDocId(filtered[0]?.id || '');
     }
-  };
+  });
 
   // Open Local File
   const handleOpenFile = async () => {
-    const result = await openLocalFile();
-    if (!result) return;
+    if (!writableRef.current || fileOperationRef.current || !handlesRestored) return;
+    const result = await openLocalFile().catch((error) => {
+      toast.error(error instanceof Error ? error.message : '无法读取此文件');
+      return null;
+    });
+    if (!result || !writableRef.current || fileOperationRef.current || !readyRef.current) return;
 
-    let detectedMode: DocMode = 'md';
-    if (result.fileName.endsWith('.html') || result.fileName.endsWith('.htm')) {
-      detectedMode = 'h5';
-    } else if (result.fileName.endsWith('.txt') || result.fileName.endsWith('.log')) {
-      detectedMode = 'txt';
-    }
-
-    const newId = `doc-${Date.now()}`;
+    const detectedMode = detectFileMode(result.fileName);
+    const newId = crypto.randomUUID();
     const newDoc: DocumentItem = {
       id: newId,
       title: result.fileName,
@@ -424,244 +564,215 @@ export function App() {
       isModified: false,
     };
 
-    setDocuments((prev) => [newDoc, ...prev]);
-    setCurrentDocId(newId);
+    if (mountedRootRef.current) {
+      await withFileOperation(async () => {
+        const connection = await connectDesktopWorkspace();
+        const [imported] = await restoreDesktopDocuments(connection.root, connection.workspaceId, [newDoc], []);
+        if (imported.fileHandle) saveQueue.bind(imported.id, imported.fileHandle, imported.content);
+        setDocuments((prev) => [imported, ...prev]);
+        setCurrentDocId(imported.id);
+        await refreshICloudTree();
+      });
+    } else {
+      setDocuments((prev) => [newDoc, ...prev]);
+      setCurrentDocId(newId);
+    }
   };
 
   // Quick Export Direct Handler
   const handleQuickExport = async (type: 'md' | 'html' | 'pdf' | 'txt' | 'rich') => {
     const baseName = currentDoc.title.replace(/\.[^/.]+$/, '') || 'EasyMD-文档';
+    try {
     switch (type) {
       case 'md':
         downloadFile(currentDoc.content, `${baseName}.md`, 'text/markdown;charset=utf-8');
         break;
       case 'html': {
-        let body = currentDoc.content;
-        if (currentDoc.mode === 'md') {
-          body = await renderMarkdown(currentDoc.content);
-        }
-        const html = generateStandaloneHtml(currentDoc.title, body, currentDoc.mode === 'h5');
+        const html = await exportDocumentHtml(currentDoc.title, currentDoc.content, currentDoc.mode, allowNetwork);
         downloadFile(html, `${baseName}.html`, 'text/html;charset=utf-8');
         break;
       }
       case 'pdf':
-        window.print();
+        await printDocument(currentDoc.title, currentDoc.content, currentDoc.mode, allowNetwork, networkSignal);
         break;
       case 'txt':
         downloadFile(currentDoc.content, `${baseName}.txt`, 'text/plain;charset=utf-8');
         break;
       case 'rich': {
-        let rendered = currentDoc.content;
-        if (currentDoc.mode === 'md') {
-          rendered = await renderMarkdown(currentDoc.content);
-        }
-        await copyRichTextToClipboard(rendered, currentDoc.content);
+        if (!await copyDocumentRichText(currentDoc.content, currentDoc.mode, allowNetwork)) toast.error('复制失败，请检查剪贴板权限');
         break;
       }
     }
+    } catch (error) {
+      toast.error(`导出失败：${(error as Error).message}`);
+    }
   };
 
-  // --- iCloud Directory Handlers (Tree & Management) ---
-
-  // 1. Mount iCloud directory
-  const handleMountICloud = async () => {
+  // File mutations pause editor input until handles and save queues are consistent again.
+  const withFileOperation = async (operation: () => Promise<void>) => {
+    if (!writableRef.current || !handlesRestored || fileOperationRef.current) return;
+    fileOperationRef.current = true;
+    setIsFileOperation(true);
     try {
-      setIcloudDir((s) => ({ ...s, isSyncing: true }));
-      const handle = await chooseICloudDirectory();
-      if (!handle) {
-        setIcloudDir((s) => ({ ...s, isSyncing: false }));
-        return;
-      }
-      const tree = await listDirectoryTree(handle);
-      const files = flattenICloudTree(tree);
-      setIcloudDir({
-        handle,
-        name: handle.name || 'iCloud 云盘',
-        isSyncing: false,
-        lastSyncedAt: Date.now(),
-        filesCount: files.length,
-      });
-      setIcloudTree(tree);
-    } catch (err) {
-      setIcloudDir((s) => ({ ...s, isSyncing: false }));
-      toast.error((err as Error).message || '选择 iCloud 目录失败');
+      await operation();
+    } catch (error) {
+      toast.error((error as Error).message || '文件操作失败，草稿已保留');
+    } finally {
+      fileOperationRef.current = false;
+      setIsFileOperation(false);
     }
   };
 
-  // 2. Unmount iCloud directory
-  const handleUnmountICloud = async () => {
-    const ok = await confirm({
-      title: '断开 iCloud 同步',
-      message: '确认断开与当前 iCloud 文稿目录的绑定吗？文件仍将完好保留在您的 Mac iCloud 云盘中。',
-      confirmText: '断开绑定',
-      isDestructive: true,
-      icon: 'cloud',
-    });
-    if (ok) {
-      await clearStoredDirectoryHandle();
-      setIcloudDir({
-        handle: null,
-        name: '',
-        isSyncing: false,
-        lastSyncedAt: null,
-        filesCount: 0,
-      });
-      setIcloudTree([]);
-      toast.info('已断开与 iCloud 文稿目录的绑定');
-    }
-  };
-
-  // 3. Refresh iCloud directory tree
-  const handleRefreshICloud = async () => {
-    if (!icloudDir.handle) return;
-    setIcloudDir((s) => ({ ...s, isSyncing: true }));
-    const tree = await listDirectoryTree(icloudDir.handle);
-    const files = flattenICloudTree(tree);
+  const refreshICloudTree = async () => {
+    const root = mountedRootRef.current;
+    if (!root) return;
+    const tree = await listDirectoryTree(root);
     setIcloudTree(tree);
-    setIcloudDir((s) => ({
-      ...s,
-      isSyncing: false,
-      lastSyncedAt: Date.now(),
-      filesCount: files.length,
-    }));
+    setIcloudDir((state) => ({ ...state, handle: root, name: root.name,
+      isSyncing: false, filesCount: flattenICloudTree(tree).length }));
   };
 
-  // 4. Open iCloud file
-  const handleOpenICloudFile = async (handle: FileSystemFileHandle, name: string, mode: DocMode) => {
-    try {
-      const content = await readICloudFileContent(handle);
-      const docId = `icloud-${name}`;
+  const handleMountICloud = () => withFileOperation(async () => {
+    if (!await saveQueue.flush()) throw new Error('请先处理未保存的修改，再重新连接文稿目录');
+    const connection = await prepareDesktopWorkspace();
+    await applyDesktopWorkspace(connection);
+  });
 
-      const existing = documents.find((d) => d.id === docId || d.title === name);
-      if (existing) {
-        setDocuments((prev) =>
-          prev.map((d) =>
-            d.id === existing.id
-              ? { ...d, content, fileHandle: handle, isICloudFile: true, updatedAt: Date.now() }
-              : d
-          )
-        );
+  const handleRefreshICloud = () => withFileOperation(refreshICloudTree);
+
+  const handleOpenICloudFile = (handle: FileSystemFileHandle, name: string, mode: DocMode) =>
+    withFileOperation(async () => {
+      const root = mountedRootRef.current;
+      if (!root) throw new Error('请先连接目录');
+      const path = await root.resolve(handle);
+      if (!path) throw new Error('文件不在当前连接的目录中');
+      let existing: DocumentItem | undefined;
+      for (const doc of documentsRef.current) {
+        if (doc.fileHandle && await doc.fileHandle.isSameEntry(handle)) {
+          existing = doc;
+          break;
+        }
+      }
+      if (existing?.isModified && !await saveQueue.flush(existing.id)) {
         setCurrentDocId(existing.id);
-      } else {
-        const newDoc: DocumentItem = {
-          id: docId,
-          title: name,
-          content,
-          mode,
-          updatedAt: Date.now(),
-          isModified: false,
-          fileHandle: handle,
-          isICloudFile: true,
-        };
-        setDocuments((prev) => [newDoc, ...prev]);
-        setCurrentDocId(docId);
+        const reload = await confirm({
+          title: '保留草稿并读取磁盘文件',
+          message: '当前编辑尚未同步。将先保留一份本地草稿副本，再读取磁盘版本，供你比较和合并。',
+          confirmText: '保留副本并读取', icon: 'warning',
+        });
+        if (!reload) return;
+        const copy = { ...existing, id: crypto.randomUUID(),
+          title: `未同步副本-${existing.title}`, fileHandle: null, storageBackend: undefined, storageRoot: undefined,
+          isICloudFile: false, path: undefined, lastSyncedContent: undefined };
+        setDocuments((prev) => [copy, ...prev]);
       }
-    } catch (err) {
-      toast.error(`无法读取文件: ${(err as Error).message}`);
-    }
-  };
-
-  // 5. Create new file inside specific directory in iCloud
-  const handleCreateICloudFileInDir = async (parentDirHandle: FileSystemDirectoryHandle, targetMode: DocMode) => {
-    const ext = targetMode === 'md' ? 'md' : targetMode === 'h5' ? 'html' : 'txt';
-    const defaultName = `文稿-${new Date().toLocaleTimeString('zh-CN', { hour12: false }).replace(/:/g, '')}.${ext}`;
-    const fileName = await prompt({
-      title: '新建 iCloud 文稿',
-      message: '请输入新文稿名称（建议包含扩展名）：',
-      defaultValue: defaultName,
-      placeholder: defaultName,
-      confirmText: '创建',
-      icon: 'doc',
+      const content = await readICloudFileContent(handle);
+      const id = existing?.id || crypto.randomUUID();
+      saveQueue.bind(id, handle, content);
+      setSyncStates((prev) => ({ ...prev, [id]: { status: 'saved' } }));
+      const opened: DocumentItem = { ...existing, ...desktopBinding(handle), id, title: name, content, mode,
+        updatedAt: Date.now(), isModified: false, fileHandle: handle, isICloudFile: true,
+        path: path.join('/'), lastSyncedContent: content };
+      setDocuments((prev) => existing
+        ? prev.map((doc) => doc.id === id ? opened : doc) : [opened, ...prev]);
+      setCurrentDocId(id);
     });
-    if (!fileName || !fileName.trim()) return;
 
-    const template = TEMPLATES[targetMode];
-    const fileHandle = await createICloudFile(parentDirHandle, fileName.trim(), template.content);
-    if (!fileHandle) {
-      toast.error('在 iCloud 目录中创建文稿失败，请检查写入权限');
-      return;
-    }
-
-    await handleRefreshICloud();
-    const newDocId = `icloud-${fileName.trim()}`;
-    const newDoc: DocumentItem = {
-      id: newDocId,
-      title: fileName.trim(),
-      content: template.content,
-      mode: targetMode,
-      updatedAt: Date.now(),
-      isModified: false,
-      fileHandle,
-      isICloudFile: true,
-    };
-    setDocuments((prev) => [newDoc, ...prev]);
-    setCurrentDocId(newDocId);
-    toast.success(`已在 iCloud 中创建 "${fileName.trim()}"`);
-  };
-
-  // 6. Create subdirectory in iCloud
-  const handleCreateICloudSubDir = async (parentDirHandle: FileSystemDirectoryHandle) => {
-    const folderName = await prompt({
-      title: '新建 iCloud 文件夹',
-      message: '请输入新建文件夹名称：',
-      defaultValue: '新建文件夹',
-      placeholder: '新建文件夹',
-      confirmText: '创建',
-      icon: 'folder',
+  const handleCreateICloudFileInDir = async (parent: FileSystemDirectoryHandle, mode: DocMode) => {
+    const extension = mode === 'h5' ? 'html' : mode;
+    const name = await prompt({ title: '新建文稿',
+      message: '请输入文件名；已有同名文件不会被覆盖。', defaultValue: `新文稿.${extension}`,
+      confirmText: '创建', icon: 'doc' });
+    if (!name?.trim()) return;
+    await withFileOperation(async () => {
+      const handle = await createICloudFile(parent, name.trim(), '');
+      if (!handle) throw new Error('创建失败：请检查名称、同名文件和目录写入权限');
+      const id = crypto.randomUUID();
+      const path = await mountedRootRef.current?.resolve(handle);
+      saveQueue.bind(id, handle, '');
+      setDocuments((prev) => [{ ...desktopBinding(handle), id, title: handle.name, content: '', mode,
+        updatedAt: Date.now(), isModified: false, fileHandle: handle, isICloudFile: true,
+        path: path?.join('/'), lastSyncedContent: '' }, ...prev]);
+      setCurrentDocId(id);
+      await refreshICloudTree();
+      toast.success(`已创建“${name.trim()}”`);
     });
-    if (!folderName || !folderName.trim()) return;
-
-    const dirHandle = await createICloudDirectory(parentDirHandle, folderName.trim());
-    if (dirHandle) {
-      await handleRefreshICloud();
-      toast.success(`已创建 iCloud 文件夹 "${folderName.trim()}"`);
-    } else {
-      toast.error('创建文件夹失败');
-    }
   };
 
-  // 7. Rename file or folder in iCloud
-  const handleRenameICloudEntry = async (
-    parentDirHandle: FileSystemDirectoryHandle,
-    oldName: string,
-    newName: string,
-    isDirectory: boolean
-  ) => {
+  const handleCreateICloudSubDir = async (parent: FileSystemDirectoryHandle) => {
+    const name = await prompt({ title: '新建文件夹', message: '请输入文件夹名称：',
+      defaultValue: '新建文件夹', confirmText: '创建', icon: 'folder' });
+    if (!name?.trim()) return;
+    await withFileOperation(async () => {
+      const handle = await createICloudDirectory(parent, name.trim());
+      if (!handle) throw new Error('创建文件夹失败，请检查名称和权限');
+      await refreshICloudTree();
+      toast.success(`已创建“${name.trim()}”`);
+    });
+  };
+
+  // Resolve by actual handles relative to the parent, never by display titles.
+  const documentsInEntry = async (parent: FileSystemDirectoryHandle, name: string, isDirectory: boolean) => {
+    const matches: { doc: DocumentItem; path: string[] }[] = [];
+    for (const doc of documentsRef.current) {
+      if (!doc.fileHandle) continue;
+      const path = await parent.resolve(doc.fileHandle);
+      if (path?.[0] === name && (isDirectory || path.length === 1)) matches.push({ doc, path });
+    }
+    return matches;
+  };
+
+  const handleRenameICloudEntry = (parent: FileSystemDirectoryHandle, oldName: string,
+    newName: string, isDirectory: boolean) => withFileOperation(async () => {
     if (!newName.trim() || newName.trim() === oldName) return;
-    const ok = await renameICloudEntry(parentDirHandle, oldName, newName.trim(), isDirectory);
-    if (ok) {
-      await handleRefreshICloud();
-      if (!isDirectory) {
-        setDocuments((prev) =>
-          prev.map((d) => (d.title === oldName ? { ...d, title: newName.trim() } : d))
-        );
-      }
-      toast.success(`已重命名为 "${newName.trim()}"`);
-    } else {
-      toast.error('重命名失败，请检查文件名称与权限');
+    const affected = await documentsInEntry(parent, oldName, isDirectory);
+    for (const { doc } of affected) {
+      saveQueue.schedule(doc.id, doc.content);
+      if (!await saveQueue.flush(doc.id)) throw new Error('请先处理未同步的修改，再重命名');
     }
-  };
+    const result = await renameICloudEntry(parent, oldName, newName.trim(), isDirectory);
+    if (!result) throw new Error('重命名失败：请检查名称、同名条目和权限；源文件已保留');
+    const rebound = new Map<string, DocumentItem>();
+    for (const { doc, path } of affected) {
+      let handle: FileSystemFileHandle;
+      if (isDirectory) {
+        let directory = result.handle as FileSystemDirectoryHandle;
+        for (const part of path.slice(1, -1)) directory = await directory.getDirectoryHandle(part);
+        handle = await directory.getFileHandle(path[path.length - 1]);
+      } else handle = result.handle as FileSystemFileHandle;
+      const diskContent = await readICloudFileContent(handle);
+      saveQueue.bind(doc.id, handle, doc.content);
+      const newPath = await mountedRootRef.current?.resolve(handle);
+      rebound.set(doc.id, { ...doc, ...desktopBinding(handle), title: handle.name, fileHandle: handle,
+        path: newPath?.join('/'), lastSyncedContent: doc.content, isModified: diskContent !== doc.content });
+      if (diskContent !== doc.content) saveQueue.schedule(doc.id, doc.content);
+    }
+    setDocuments((prev) => prev.map((doc) => rebound.get(doc.id) || doc));
+    await refreshICloudTree();
+    toast.success(`已重命名为“${newName.trim()}”`);
+  });
 
-  // 8. Delete file or folder from iCloud
-  const handleDeleteICloudEntry = async (
-    parentDirHandle: FileSystemDirectoryHandle,
-    name: string,
-    isDirectory: boolean
-  ) => {
-    const ok = await deleteICloudEntry(parentDirHandle, name, isDirectory);
-    if (ok) {
-      await handleRefreshICloud();
-      if (!isDirectory) {
-        setDocuments((prev) => prev.filter((d) => d.title !== name));
-      }
-      toast.success(`已从 iCloud 删除 "${name}"`);
-    } else {
-      toast.error('删除失败');
+  const handleDeleteICloudEntry = (parent: FileSystemDirectoryHandle, name: string,
+    isDirectory: boolean) => withFileOperation(async () => {
+    const affected = await documentsInEntry(parent, name, isDirectory);
+    for (const { doc } of affected) {
+      if (!await saveQueue.flush(doc.id)) throw new Error('该文件还有未同步修改，请先保留副本或导出备份');
     }
-  };
+    if (!await deleteICloudEntry(parent, name, isDirectory)) throw new Error('删除失败，文稿仍保留');
+    const removed = new Set(affected.map(({ doc }) => doc.id));
+    removed.forEach((id) => saveQueue.cancel(id));
+    const remaining = documentsRef.current.filter((doc) => !removed.has(doc.id));
+    if (!remaining.length) remaining.push({ id: crypto.randomUUID(), title: '未命名.md',
+      content: '', mode: 'md', updatedAt: Date.now(), isModified: false });
+    setDocuments(remaining);
+    if (removed.has(currentDocId)) setCurrentDocId(remaining[0].id);
+    await refreshICloudTree();
+    toast.success(`已删除“${name}”`);
+  });
 
   // Insert text into CodeMirror at cursor
   const handleInsertText = (before: string, after: string = '', defaultText: string = '') => {
+    if (fileOperationRef.current || !writableRef.current || !readyRef.current) return;
     const view = editorRef.current?.view;
     if (!view) {
       handleContentChange(currentDoc.content + before + defaultText + after);
@@ -747,7 +858,8 @@ export function App() {
             break;
           case 'p':
             e.preventDefault();
-            window.print();
+            void printDocument(currentDoc.title, currentDoc.content, currentDoc.mode, allowNetwork, networkSignal)
+              .catch((error) => toastRef.current.error(`打印失败：${(error as Error).message}`));
             break;
         }
       } else if (e.key === 'Escape') {
@@ -759,7 +871,7 @@ export function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentDoc.mode, currentDoc.content]);
+  }, [currentDoc, allowNetwork, networkSignal]);
 
   // Fullscreen Toggle
   const toggleFullscreen = () => {
@@ -778,8 +890,9 @@ export function App() {
 
   // Persist sidebar width
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_SIDEBAR_WIDTH, String(sidebarWidth));
-  }, [sidebarWidth]);
+    if (!workspace.isWritable) return;
+    try { localStorage.setItem(STORAGE_KEY_SIDEBAR_WIDTH, String(sidebarWidth)); } catch { /* optional preference */ }
+  }, [sidebarWidth, workspace.isWritable]);
 
   // Sidebar drag resizer listener
   useEffect(() => {
@@ -846,15 +959,21 @@ export function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#ececed] dark:bg-[#121214] font-sans antialiased">
+      {workspace.status === 'reader' && (
+        <div role="status" className="px-4 py-2 bg-amber-100 text-amber-900 text-xs">
+          另一窗口正在编辑此工作区。本窗口为只读快照；关闭编辑窗口后刷新此页即可编辑。
+        </div>
+      )}
       {/* 1. macOS Titlebar */}
       <MacTitleBar
         title={currentDoc.title}
         setTitle={handleTitleChange}
+        isTitleReadOnly={!!currentDoc.isICloudFile || isFileOperation || !handlesRestored || !workspace.isWritable}
         mode={currentDoc.mode}
         setMode={handleModeChange}
         layout={layout}
         setLayout={setLayout}
-        theme={theme}
+        theme={effectiveTheme}
         setTheme={setTheme}
         isModified={!isSaved}
         isSidebarOpen={isSidebarOpen}
@@ -896,9 +1015,10 @@ export function App() {
             }
           }}
           icloudDir={icloudDir}
+          workspaceDirectory={workspaceDirectory}
+          workspaceError={workspaceError}
           icloudTree={icloudTree}
           onMountICloud={handleMountICloud}
-          onUnmountICloud={handleUnmountICloud}
           onRefreshICloud={handleRefreshICloud}
           onOpenICloudFile={handleOpenICloudFile}
           onCreateICloudFileInDir={handleCreateICloudFileInDir}
@@ -949,12 +1069,14 @@ export function App() {
                 className="h-full overflow-hidden flex flex-col"
               >
                 <EditorArea
+                  key={currentDoc.id}
                   content={currentDoc.content}
                   onChange={handleContentChange}
                   mode={currentDoc.mode}
-                  theme={theme}
+                  theme={effectiveTheme}
                   settings={settings}
                   editorRef={editorRef}
+                  readOnly={isFileOperation || !handlesRestored || !workspace.isWritable}
                   onCursorChange={(line, col) => setCursorPos({ line, col })}
                 />
               </div>
@@ -983,10 +1105,14 @@ export function App() {
                 }`}
               >
                 <PreviewArea
+                  key={`${currentDoc.id}:${allowNetwork}`}
                   content={currentDoc.content}
                   mode={currentDoc.mode}
-                  theme={theme}
+                  theme={effectiveTheme}
                   previewRef={previewRef}
+                  allowNetwork={allowNetwork}
+                  networkSignal={networkSignal}
+                  onToggleNetwork={() => { void handleToggleNetwork(); }}
                 />
               </div>
             )}
@@ -1000,20 +1126,35 @@ export function App() {
         stats={stats}
         cursorPos={cursorPos}
         isSaved={isSaved}
+        saveError={saveError}
+        onRetrySave={() => {
+          if (!workspace.isWritable) return;
+          try {
+            localStorage.setItem(STORAGE_KEY_DOCS, serializeDocuments(documentsRef.current));
+            setLocalSaveError(null);
+          } catch { setLocalSaveError('本地存储已满或不可用，请立即导出备份'); }
+          void saveQueue.flush(currentDoc.id);
+        }}
+        onReloadFile={currentDoc.fileHandle ? () => {
+          void handleOpenICloudFile(currentDoc.fileHandle!, currentDoc.fileHandle!.name, currentDoc.mode);
+        } : undefined}
         icloudStatus={{
-          isConnected: !!icloudDir.handle,
+          isConnected: !!icloudDir.handle && !!currentDoc.isICloudFile,
           name: icloudDir.name,
-          isSyncing: icloudDir.isSyncing,
+          isSyncing: syncStates[currentDoc.id]?.status === 'saving' || syncStates[currentDoc.id]?.status === 'pending',
         }}
       />
 
       {/* 4. Modals */}
       <ExportModal
+        key={currentDoc.id}
         isOpen={isExportOpen}
         onClose={() => setIsExportOpen(false)}
         title={currentDoc.title}
         content={currentDoc.content}
         mode={currentDoc.mode}
+        allowNetwork={allowNetwork}
+        networkSignal={networkSignal}
       />
 
       <ShortcutsModal
@@ -1033,7 +1174,7 @@ export function App() {
         onClose={() => setIsICloudGuideOpen(false)}
         onChooseDirectory={handleMountICloud}
         isConnected={!!icloudDir.handle}
-        dirName={icloudDir.name}
+        dirName={workspaceDirectory}
       />
     </div>
   );

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EasyMD 渲染回归测试</title>
+  <style>body{font:16px/1.6 system-ui,sans-serif;max-width:1000px;margin:40px auto;padding:0 20px}li{margin:12px 0;white-space:pre-wrap}.pass{color:#157a35}.fail{color:#c42626}code{background:#eee;padding:2px 5px}</style>
+</head>
+<body>
+  <h1>EasyMD 浏览器渲染回归测试</h1>
+  <p>运行实际 DOMPurify、Mermaid 和导出流程，不读写用户文稿、不打开系统打印窗口。</p>
+  <ol id="results"></ol>
+  <p id="summary" aria-live="polite">正在运行…</p>
+  <script type="module">
+    import { renderMarkdown, extractToc } from '../src/utils/markdown.ts';
+    import { readMermaidSource, renderMermaidSvg } from '../src/utils/diagrams.ts';
+    import { exportDocumentHtml } from '../src/utils/fileSystem.ts';
+
+    let passed = 0;
+    let failed = 0;
+    const assert = (condition, message) => { if (!condition) throw new Error(message); };
+    const parse = html => new DOMParser().parseFromString(html, 'text/html');
+    const run = async (name, test) => {
+      const result = document.createElement('li');
+      document.getElementById('results').append(result);
+      try {
+        await test();
+        passed++;
+        result.className = 'pass';
+        result.textContent = `PASS — ${name}`;
+      } catch (error) {
+        failed++;
+        result.className = 'fail';
+        result.textContent = `FAIL — ${name}\n${error.stack || error.message}`;
+      }
+    };
+
+    await run('真实净化后保留 Mermaid 箭头源码，且可从纯文本恢复', async () => {
+      const source = 'graph TD\nA["Start <b>label</b>"] --> B[End]';
+      const doc = parse(await renderMarkdown('```mermaid\n' + source + '\n```'));
+      const node = doc.querySelector('.mermaid');
+      assert(node && node.getAttribute('data-source'), 'data-source 被净化丢失');
+      assert(readMermaidSource(node) === source, '源码不能完整解码');
+      assert(node.children.length === 0, '源码被当作 HTML 注入');
+      node.removeAttribute('data-source');
+      assert(readMermaidSource(node) === source, '纯文本兜底无法恢复源码');
+    });
+
+    await run('真实净化保留公式，移除脚本、事件和全局样式', async () => {
+      const doc = parse(await renderMarkdown('$x^2$\n\n<img src="x" onerror="alert(1)"><script>alert(1)<\/script><style>body{display:none}</style>'));
+      assert(doc.querySelector('.katex'), '公式内容丢失');
+      assert(!doc.querySelector('[onerror], script, style'), '不安全内容未被移除');
+    });
+
+    await run('代码中的美元符号与模板字符串不变，重复标题大纲和 DOM 一致', async () => {
+      const code = 'const x = `${a} ${b}`;';
+      const input = '# Intro\n\n```js\n' + code + '\n```\n\n# Intro\n\nSetext &amp; title\n---';
+      const doc = parse(await renderMarkdown(input));
+      assert(doc.querySelector('pre code').textContent.trim() === code, '代码字面量被改写');
+      assert(!doc.querySelector('pre .katex'), '代码被解析为公式');
+      const ids = [...doc.querySelectorAll('h1,h2,h3,h4,h5,h6')].map(node => node.id);
+      assert(new Set(ids).size === ids.length, '标题 ID 重复');
+      assert(JSON.stringify(ids) === JSON.stringify(extractToc(input).map(item => item.id)), '大纲与预览 ID 不一致');
+    });
+
+    await run('真实 Mermaid 和二次 SVG 净化保留节点、连线文字', async () => {
+      const svg = await renderMermaidSvg('graph TD\nA[Start] -->|Next| B[End]');
+      const doc = parse(svg);
+      assert(doc.querySelector('svg'), '没有生成 SVG');
+      const text = doc.body.textContent;
+      for (const label of ['Start', 'Next', 'End']) assert(text.includes(label), `SVG 丢失 ${label}`);
+    });
+
+    await run('HTML 导出内含 SVG、公式、20 个字体及完整许可，无 CDN 依赖', async () => {
+      const html = await exportDocumentHtml('Export </title> test', '$x^2$\n\n```mermaid\ngraph TD\nA[Export Start] --> B[Export End]\n```', 'md');
+      const doc = parse(html);
+      assert(doc.title === 'Export </title> test', '标题没有安全转义');
+      assert(doc.querySelector('.mermaid svg'), '导出图表退化为源码');
+      assert(doc.querySelector('.mermaid').textContent.includes('Export Start'), '导出 SVG 丢失节点文字');
+      assert(doc.querySelector('.katex'), '导出丢失公式');
+      assert((html.match(/url\("data:font\/woff2;base64,/g) || []).length >= 20, '公式字体未完整内嵌');
+      assert(!doc.querySelector('link[rel="stylesheet"],script[src]'), '导出仍引用外部样式/脚本');
+      assert(!/url\((?:fonts\/|https?:)/.test(doc.querySelector('style').textContent), '公式字体依赖外部URL');
+      assert(html.includes('SIL OPEN FONT LICENSE') && html.includes('Khan Academy') && html.includes('Redistribution and use'), '导出缺少第三方许可证');
+    });
+
+    await run('TXT 导出保留字面标签和换行，H5 完整文档按原样导出', async () => {
+      const text = '<b>literal</b>\nsecond line';
+      const txt = parse(await exportDocumentHtml('notes.txt', text, 'txt'));
+      assert(txt.querySelector('pre').textContent === text, '纯文本被当作 HTML 解释');
+      const source = '<!doctype html><html><body><p>H5 document</p></body></html>';
+      assert(await exportDocumentHtml('demo.html', source, 'h5') === source, '完整 H5 被额外包装');
+    });
+
+    await run('Markdown 不能伪造全局界面或表单，受信公式/代码/任务框仍保留', async () => {
+      const source = '<div id="root" class="fixed inset-0 z-50" style="position:fixed;inset:0;z-index:999999" data-easymd-generated="forged">spoof</div>\n<form action="https://example.test/collect"><input name="password"><button>Submit</button></form>\n<p><strong>Safe formatting</strong></p>\n\n$x^2$\n\n- [x] completed\n\n```js\nconst answer = 42;\n```';
+      const doc = parse(await renderMarkdown(source));
+      assert(!doc.querySelector('#root,.fixed,form,button,input:not([type="checkbox"])'), '原始HTML可覆盖应用或提交表单');
+      assert([...doc.querySelectorAll('[style]')].every(node => node.closest('.katex')), '原始HTML样式逃逸');
+      assert(!doc.querySelector('[data-easymd-generated]'), '受信标记暴露给文稿');
+      assert(doc.querySelector('strong')?.textContent === 'Safe formatting', '安全HTML语义格式被破坏');
+      assert(doc.querySelector('.katex [style]'), '公式布局样式被误删');
+      assert(doc.querySelector('input[type="checkbox"]')?.disabled, '任务清单复选框丢失');
+      assert(doc.querySelector('.hljs .hljs-keyword'), '代码高亮被误删');
+    });
+
+    await run('文稿外链不接管编辑器，图片和外链不发送编辑器地址', async () => {
+      const doc = parse(await renderMarkdown('[External](https://example.test/)\n\n[Section](#intro)\n\n![Image](https://example.test/image.png)'));
+      const link = doc.querySelector('a[href="https://example.test/"]');
+      assert(link?.target === '_blank' && link.relList.contains('noopener') && link.relList.contains('noreferrer'), '外链没有隔离opener/referrer');
+      assert(!doc.querySelector('a[href="#intro"]').hasAttribute('target'), '内部目录链接被打开成新窗口');
+      assert(doc.querySelector('img').getAttribute('referrerpolicy') === 'no-referrer', '图片仍暴露编辑器URL');
+    });
+
+    const summary = document.getElementById('summary');
+    summary.className = failed ? 'fail' : 'pass';
+    summary.textContent = `完成：${passed} 项通过，${failed} 项失败。`;
+    document.title = `${failed ? 'FAIL' : 'PASS'} — EasyMD 渲染测试`;
+  </script>
+</body>
+</html>

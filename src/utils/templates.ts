@@ -2,7 +2,7 @@ import { DocMode } from '../types';
 
 export const TEMPLATES: Record<DocMode, { title: string; content: string }> = {
   md: {
-    title: '欢迎使用.md',
+    title: 'EasyMD 快速指南.md',
     content: `# EasyMD 快速指南
 
 > **EasyMD** 是一款轻量、现代、优雅的在线多模式文档编辑与实时预览工具，全面适配 macOS 设计语言，专为日常办公打造。
@@ -11,7 +11,7 @@ export const TEMPLATES: Record<DocMode, { title: string; content: string }> = {
 
 ## 💡 核心特性概览
 
-- 🍎 **macOS 极简体验**：原生毛玻璃质感、交通灯快捷状态、SF 字体与深浅色模式跟随。
+- 🍎 **macOS 极简体验**：原生毛玻璃质感、交通灯快捷状态、SF 字体与深浅色主题切换。
 - 📑 **三合一多模式支持**：
   - **Markdown (MD)**：支持 GFM 语法、LaTeX 数学公式、Mermaid 图表、代码高亮与大纲导航。
   - **H5 网页 (H5)**：编写 HTML/CSS/JS，支持 iPhone / iPad / Mac 等多端设备沙箱预览。
@@ -286,7 +286,7 @@ export function initializeEasyMD(doc: DocumentOptions) {
 --------------------------------------------------------------------------------
 * 备忘 1:
   - 调研轻量化编辑器在本地存储与隐私保护方面的优势。
-  - 所有数据无需上云，纯本地浏览器离线存储，数据绝对安全。
+  - 文稿默认保存在本地浏览器；外链资源仍可能联网，请定期导出备份。
 
 * 备忘 2:
   - 常用快捷键记牢：⌘+S 快速落盘，⌘+B 文本标记。
@@ -303,7 +303,7 @@ export function initializeEasyMD(doc: DocumentOptions) {
   3. 各模块负责人下周二前提交详细进度评估。
 
 ================================================================================
-提示：TXT 纯文本模式支持任意编码文件编辑，字符与行数实时精准统计。
+提示：TXT 纯文本模式支持 UTF-8 文本编辑，字符与行数实时精准统计。
 ================================================================================
 `,
   },

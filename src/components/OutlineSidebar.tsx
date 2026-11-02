@@ -5,8 +5,7 @@ import {
   Plus,
   Clock,
   ChevronRight,
-  Cloud,
-  FolderSync,
+  HardDrive,
   RefreshCw,
   X,
   Info,
@@ -38,9 +37,10 @@ interface OutlineSidebarProps {
 
   // iCloud Sync props
   icloudDir: ICloudDirState;
+  workspaceDirectory: string;
+  workspaceError?: string | null;
   icloudTree: ICloudNode[];
   onMountICloud: () => void;
-  onUnmountICloud: () => void;
   onRefreshICloud: () => void;
   onOpenICloudFile: (handle: FileSystemFileHandle, name: string, mode: DocMode) => void;
   onCreateICloudFileInDir: (parentDirHandle: FileSystemDirectoryHandle, mode: DocMode) => void;
@@ -68,9 +68,10 @@ export const OutlineSidebar: React.FC<OutlineSidebarProps> = ({
   currentMode,
   onHeadingClick,
   icloudDir,
+  workspaceDirectory,
+  workspaceError,
   icloudTree,
   onMountICloud,
-  onUnmountICloud,
   onRefreshICloud,
   onOpenICloudFile,
   onCreateICloudFileInDir,
@@ -99,11 +100,9 @@ export const OutlineSidebar: React.FC<OutlineSidebarProps> = ({
     return () => window.removeEventListener('click', handleDocumentClick);
   }, [isSortDropdownOpen]);
 
-  if (!isOpen) return null;
-
   // Sorted documents
   const sortedDocs = useMemo(() => {
-    const list = [...documents];
+    const list = documents.filter((doc) => !doc.isICloudFile || !doc.fileHandle);
     if (sortBy === 'name') {
       list.sort((a, b) => a.title.localeCompare(b.title, 'zh-CN'));
     } else if (sortBy === 'date') {
@@ -113,6 +112,8 @@ export const OutlineSidebar: React.FC<OutlineSidebarProps> = ({
     }
     return list;
   }, [documents, sortBy]);
+
+  if (!isOpen) return null;
 
   const scrollToHeading = (id: string, text: string) => {
     if (onHeadingClick) {
@@ -291,9 +292,9 @@ export const OutlineSidebar: React.FC<OutlineSidebarProps> = ({
                 {/* iCloud Header & Control Bar */}
                 <div className="flex items-center justify-between mb-2 px-1">
                   <div className="flex items-center space-x-1.5 min-w-0">
-                    <Cloud size={14} className="text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                    <HardDrive size={14} className="text-blue-600 dark:text-blue-400 flex-shrink-0" />
                     <span className="text-xs font-semibold text-blue-900 dark:text-blue-200 truncate">
-                      iCloud: {icloudDir.name}
+                      固定文稿目录
                     </span>
                   </div>
 
@@ -301,46 +302,42 @@ export const OutlineSidebar: React.FC<OutlineSidebarProps> = ({
                     <button
                       onClick={() => onCreateICloudSubDir(icloudDir.handle!)}
                       className="p-1 rounded text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40"
-                      title="在 iCloud 根目录新建文件夹"
+                      title="在文稿目录新建文件夹"
                     >
                       <FolderPlus size={12} />
                     </button>
                     <button
                       onClick={() => onCreateICloudFileInDir(icloudDir.handle!, currentMode)}
                       className="p-1 rounded text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40"
-                      title="在 iCloud 根目录新建文稿"
+                      title="在文稿目录新建文稿"
                     >
                       <Plus size={13} />
                     </button>
                     <button
                       onClick={onRefreshICloud}
                       className="p-1 rounded text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40"
-                      title="刷新 iCloud 目录树"
+                      title="刷新文稿目录"
                     >
                       <RefreshCw size={12} className={icloudDir.isSyncing ? 'animate-spin' : ''} />
                     </button>
                     <button
                       onClick={onOpenICloudGuide}
                       className="p-1 rounded text-blue-500 hover:bg-blue-100 dark:hover:bg-blue-900/40"
-                      title="iCloud 同步说明"
+                      title="文稿保存位置"
                     >
                       <Info size={12} />
-                    </button>
-                    <button
-                      onClick={onUnmountICloud}
-                      className="p-1 rounded text-gray-400 hover:text-red-500 hover:bg-black/5 dark:hover:bg-white/10"
-                      title="断开挂载"
-                    >
-                      <X size={12} />
                     </button>
                   </div>
                 </div>
 
-                {/* Recursive iCloud Directory Tree */}
+                <p className="px-1 mb-2 text-[10px] text-blue-700/80 dark:text-blue-300/80 break-all" title={workspaceDirectory}>{workspaceDirectory}</p>
+                {/* Fixed document directory tree */}
                 <div className="pt-1 border-t border-blue-200/40 dark:border-blue-800/30">
                   <DirectoryTree
                     treeMode="icloud"
                     icloudNodes={icloudTree}
+                    rootHandle={icloudDir.handle || undefined}
+                    activeICloudPath={documents.find((doc) => doc.id === currentDocId)?.path}
                     currentDocId={currentDocId}
                     searchQuery={searchQuery}
                     onOpenICloudFile={onOpenICloudFile}
@@ -352,39 +349,21 @@ export const OutlineSidebar: React.FC<OutlineSidebarProps> = ({
                 </div>
               </div>
             ) : (
-              /* Mount iCloud CTA */
-              <div className="p-3 rounded-xl bg-gradient-to-br from-blue-50/80 to-indigo-50/80 dark:from-blue-950/20 dark:to-indigo-950/20 border border-blue-200/60 dark:border-blue-900/40">
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center space-x-1.5 text-xs font-semibold text-blue-900 dark:text-blue-200">
-                    <Cloud size={15} className="text-blue-600 dark:text-blue-400" />
-                    <span>iCloud 文稿目录同步</span>
-                  </div>
-                  <button
-                    onClick={onOpenICloudGuide}
-                    className="text-blue-500 hover:text-blue-700"
-                    title="查看同步说明"
-                  >
-                    <Info size={13} />
-                  </button>
-                </div>
-                <p className="text-[11px] text-blue-700/80 dark:text-blue-300/80 leading-relaxed mb-2.5">
-                  连接 Mac 上的 iCloud 云盘（如 iCloud 云盘/EasyMD），支持树形目录组织与多设备全自动落盘。
+              <div className="p-3 rounded-xl bg-blue-50/70 dark:bg-blue-950/20 border border-blue-200/60 dark:border-blue-900/40">
+                <div className="text-xs font-semibold text-blue-900 dark:text-blue-200">固定文稿目录</div>
+                <p className="mt-1 text-[11px] text-blue-700/80 dark:text-blue-300/80 break-all">{workspaceDirectory}</p>
+                <p role={workspaceError ? 'status' : undefined} className="mt-2 text-[11px] text-gray-500 leading-relaxed">
+                  {workspaceError || '正在连接文稿目录…'}
                 </p>
-                <button
-                  onClick={onMountICloud}
-                  className="w-full py-1.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium shadow-sm transition-all flex items-center justify-center space-x-1.5 active:scale-95"
-                >
-                  <FolderSync size={13} />
-                  <span>选择 iCloud 文稿目录</span>
-                </button>
+                {workspaceError && <button onClick={onMountICloud} className="mt-2 text-xs text-blue-600 underline">重新连接</button>}
               </div>
             )}
 
             {/* 2. Local Workspace Directory Tree */}
-            <div className="space-y-1 pt-1">
-              <div className="px-2 py-1 flex items-center justify-between text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-                <span>本地文稿目录树</span>
-                <div className="flex items-center space-x-1">
+            {(sortedDocs.length > 0 || !icloudDir.handle) && <div className="space-y-1 pt-1">
+              <div className="px-2 py-1 flex flex-col items-start gap-1.5 text-[11px] font-semibold text-gray-400">
+                <span className="max-w-full truncate whitespace-nowrap">浏览器草稿</span>
+                <div className="flex flex-wrap items-center gap-1 whitespace-nowrap">
                   <button
                     onClick={() => onNewFolder(null)}
                     className="px-1 text-gray-500 hover:text-blue-600 hover:underline"
@@ -419,8 +398,8 @@ export const OutlineSidebar: React.FC<OutlineSidebarProps> = ({
               {/* Local Folder & Document Tree Component */}
               <DirectoryTree
                 treeMode="local"
-                folders={folders}
-                documents={sortedDocs}
+                folders={icloudDir.handle ? [] : folders}
+                documents={icloudDir.handle ? sortedDocs.map((doc) => ({ ...doc, folderId: null })) : sortedDocs}
                 currentDocId={currentDocId}
                 searchQuery={searchQuery}
                 onSelectDoc={onSelectDoc}
@@ -432,7 +411,7 @@ export const OutlineSidebar: React.FC<OutlineSidebarProps> = ({
                 onDeleteFolder={onDeleteFolder}
                 onToggleFolderExpand={onToggleFolderExpand}
               />
-            </div>
+            </div>}
           </>
         ) : (
           /* Table of Contents */
@@ -478,10 +457,10 @@ export const OutlineSidebar: React.FC<OutlineSidebarProps> = ({
       <div className="p-3 border-t border-black/[0.06] dark:border-white/[0.06] text-[11px] text-gray-500 dark:text-gray-400 flex items-center justify-between">
         <div className="flex items-center space-x-1.5">
           <Clock size={12} />
-          <span>{icloudDir.handle ? 'iCloud 实时落盘' : '本地树形存储'}</span>
+          <span>{icloudDir.handle ? '固定目录自动保存' : '本机文稿存储'}</span>
         </div>
         <span className="text-[10px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-1.5 py-0.5 rounded font-mono">
-          {icloudDir.handle ? 'iCloud Active' : 'Ready'}
+          {icloudDir.handle ? '已连接' : 'Ready'}
         </span>
       </div>
     </aside>

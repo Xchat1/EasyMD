@@ -40,6 +40,8 @@ interface DirectoryTreeProps {
   treeMode: 'icloud' | 'local';
   // iCloud data
   icloudNodes?: ICloudNode[];
+  rootHandle?: FileSystemDirectoryHandle;
+  activeICloudPath?: string;
   onOpenICloudFile?: (handle: FileSystemFileHandle, name: string, mode: DocMode) => void;
   onCreateICloudFileInDir?: (parentDirHandle: FileSystemDirectoryHandle, mode: DocMode) => void;
   onCreateICloudSubDir?: (parentDirHandle: FileSystemDirectoryHandle) => void;
@@ -66,6 +68,8 @@ interface DirectoryTreeProps {
 export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
   treeMode,
   icloudNodes = [],
+  rootHandle,
+  activeICloudPath,
   onOpenICloudFile,
   onCreateICloudFileInDir,
   onCreateICloudSubDir,
@@ -125,16 +129,16 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
 
   // --- RENDER ICLOUD RECURSIVE TREE ---
   const renderICloudNode = (node: ICloudNode, level: number = 0, parentHandle?: FileSystemDirectoryHandle) => {
-    const isExpanded = expandedICloudPaths[node.path] !== false;
+    const isExpanded = !!searchQuery.trim() || expandedICloudPaths[node.path] !== false;
     const isRenaming = renamingId === `icloud-${node.path}`;
 
     // Filter match
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchesSelf = node.name.toLowerCase().includes(q);
-      const matchesChild =
-        node.children &&
-        node.children.some((c) => c.name.toLowerCase().includes(q));
+      const matches = (entry: ICloudNode): boolean => entry.name.toLowerCase().includes(q) ||
+        !!entry.children?.some(matches);
+      const matchesChild = node.children?.some(matches);
       if (!matchesSelf && !matchesChild) return null;
     }
 
@@ -234,8 +238,8 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
                   <button
                     onClick={async () => {
                       const ok = await confirm({
-                        title: '删除 iCloud 文件夹',
-                        message: `确定删除 iCloud 文件夹 "${node.name}" 及其全部子内容吗？此操作将同步至您的 Mac iCloud 云盘。`,
+                        title: '删除文稿文件夹',
+                        message: `确定删除文稿文件夹 "${node.name}" 及其全部子内容吗？文件会移至 EasyMD 目录内的 .trash 回收区。`,
                         confirmText: '删除文件夹',
                         isDestructive: true,
                         icon: 'trash',
@@ -265,7 +269,7 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
     } else {
       // File Row
       const isFileRenaming = renamingId === `icloud-${node.path}`;
-      const isActive = currentDocId?.endsWith(node.name);
+      const isActive = activeICloudPath === node.path;
 
       return (
         <div
@@ -350,7 +354,7 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
                   onClick={async () => {
                     const ok = await confirm({
                       title: '删除 iCloud 文稿',
-                      message: `确认从 iCloud 删除文稿 "${node.name}" 吗？此操作将同步至您的 Mac iCloud 云盘。`,
+                      message: `确认从 iCloud 删除文稿 "${node.name}" 吗？文件会移至 EasyMD 目录内的 .trash 回收区。`,
                       confirmText: '删除文稿',
                       isDestructive: true,
                       icon: 'trash',
@@ -376,7 +380,7 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
 
   // --- RENDER LOCAL FOLDERS & DOCUMENTS TREE ---
   const renderLocalFolder = (folder: LocalFolderNode, level: number = 0) => {
-    const isExpanded = folder.isExpanded !== false;
+    const isExpanded = !!searchQuery.trim() || folder.isExpanded !== false;
     const isRenaming = renamingId === `folder-${folder.id}`;
 
     // Child documents
@@ -609,15 +613,16 @@ export const DirectoryTree: React.FC<DirectoryTreeProps> = ({
             暂无文稿或目录，可点击右上角新建
           </div>
         ) : (
-          icloudNodes.map((node) => renderICloudNode(node, 0))
+          icloudNodes.map((node) => renderICloudNode(node, 0, rootHandle))
         )}
       </div>
     );
   }
 
   // Local tree: Top-level folders (parentId is null/undefined) + root documents (folderId is null/undefined)
-  const rootFolders = folders.filter((f) => !f.parentId);
-  const rootDocs = documents.filter((d) => !d.folderId);
+  const folderIds = new Set(folders.map((folder) => folder.id));
+  const rootFolders = folders.filter((f) => !f.parentId || !folderIds.has(f.parentId));
+  const rootDocs = documents.filter((d) => !d.folderId || !folderIds.has(d.folderId));
 
   return (
     <div className="space-y-0.5">
