@@ -1,0 +1,72 @@
+appId: com.easymd.desktop
+productName: EasyMD
+copyright: Copyright © 2026 Xchat1
+electronVersion: 45.2.1
+
+directories:
+  output: release
+  buildResources: assets
+
+# Keep real files for the local service's O_NOFOLLOW / hard-link checks.
+asar: false
+npmRebuild: false
+nodeGypRebuild: false
+buildDependenciesFromSource: false
+publish: null
+afterPack: desktop/after-pack.cjs
+
+files:
+  - desktop/**/*
+  - scripts/desktop-server.mjs
+  - dist/**/*
+  - LICENSE
+  - package.json
+  - '!node_modules{,/**/*}'
+  - '!**/node_modules{,/**/*}'
+  - '!**/.DS_Store'
+
+# Electron-builder 26.18 also retains these at the Resources root. Keep an
+# explicit, readily discoverable license copy alongside the project notices.
+extraResources:
+  - from: node_modules/electron/dist/LICENSE
+    to: licenses/Electron-LICENSE.txt
+  - from: node_modules/electron/dist/LICENSES.chromium.html
+    to: licenses/LICENSES.chromium.html
+
+artifactName: '${productName}-${version}-mac-${arch}.${ext}'
+
+mac:
+  category: public.app-category.productivity
+  icon: assets/app-icon.icns
+  darkModeSupport: true
+  extendInfo:
+    NSDocumentsFolderUsageDescription: EasyMD 需要在文稿/EasyMD 中保存和读取你的文稿。
+    NSDownloadsFolderUsageDescription: EasyMD 仅在你选择导出位置后保存导出的文稿。
+  identity: '-'
+  # Ad-hoc signing has no Developer ID Team ID. Disable library validation for
+  # this preview rather than claiming a notarizable hardened-runtime release.
+  hardenedRuntime: false
+  notarize: false
+  gatekeeperAssess: false
+  strictVerify: true
+  # Do not override LSMinimumSystemVersion: inherit the actual Electron bundle.
+  target:
+    - dmg
+    - zip
+
+dmg:
+  title: '${productName} ${version} Preview'
+  sign: false
+  writeUpdateInfo: false
+  backgroundColor: '#f4f7fc'
+  window:
+    width: 560
+    height: 360
+  contents:
+    - x: 150
+      y: 180
+      type: file
+    - x: 410
+      y: 180
+      type: link
+      path: /Applications

@@ -4,6 +4,7 @@ import { createPreviewDocument, previewSandbox } from './previewPrivacy';
 export function openSandboxedPreview(content: string, allowNetwork = false, signal?: AbortSignal): Window {
   if (signal?.aborted) throw new DOMException('此文稿的联网授权已撤销，请重新打开预览。', 'AbortError');
   const owner = window;
+  if (owner.easymdDesktop && !owner.easymdDesktop.preparePreview()) throw new Error('独立预览暂时无法打开，请重试。');
   const win = owner.open('', '_blank');
   if (!win) throw new Error('浏览器阻止了新窗口，请允许弹出窗口后重试。');
   let releaseListeners = () => {};

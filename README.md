@@ -1,6 +1,6 @@
 # EasyMD
 
-面向桌面浏览器的 Markdown、HTML 与纯文本编辑器，采用 macOS 风格界面。
+面向 macOS 和桌面浏览器的 Markdown、HTML 与纯文本编辑器。
 
 ![EasyMD 封面：浅色主题下的文稿目录、Markdown 编辑与实时预览](./assets/screenshots/readme-cover.png)
 
@@ -12,6 +12,21 @@
 | :---: | :---: | :---: |
 | [![深色主题下的 Markdown 编辑器、大纲导航、Mermaid 图表与数学公式](./assets/screenshots/markdown-dark.png)](./assets/screenshots/markdown-dark.png) | [![HTML 源码与 iPhone 尺寸的网页沙箱预览](./assets/screenshots/html-mobile-preview.png)](./assets/screenshots/html-mobile-preview.png) | [![导出与分享中心，支持 Markdown、HTML、TXT、PDF 打印与富文本复制](./assets/screenshots/export-center.png)](./assets/screenshots/export-center.png) |
 | Markdown 编辑、图表与公式排版 | 编写 HTML，切换设备视口查看效果 | 导出文稿、打印为 PDF、复制富文本 |
+
+## 下载 macOS App（预览版）
+
+支持 **macOS 13 或更新版本**。从 [GitHub Releases](https://github.com/Xchat1/EasyMD/releases) 下载适合芯片的安装包：
+
+| Mac 类型 | DMG 安装包 |
+| :--- | :--- |
+| Apple 芯片 | [EasyMD 1.0.0 · arm64](https://github.com/Xchat1/EasyMD/releases/download/v1.0.0/EasyMD-1.0.0-mac-arm64.dmg) |
+| Intel 处理器 | [EasyMD 1.0.0 · x64](https://github.com/Xchat1/EasyMD/releases/download/v1.0.0/EasyMD-1.0.0-mac-x64.dmg) |
+
+打开 DMG，将 **EasyMD 拖入“应用程序”**，再启动应用。**无需安装 Node.js、pnpm 或 Chrome**。也提供 ZIP、SHA-256 校验值和构建信息。
+
+当前是采用临时签名的预览版，**尚无 Apple Developer ID 签名，也未经 Apple 公证**，不提供自动更新。首次打开可能被 macOS 阻止；确认来源可信后，按 [Apple 官方指引](https://support.apple.com/en-us/102445)，在尝试打开后进入“系统设置 → 隐私与安全性 → 仍要打开”。不要全局关闭 Gatekeeper。
+
+桌面版内置文稿服务，随应用退出而停止；“文件”菜单可在访达中显示文稿目录。应用更新会保留文稿，重要内容仍请备份。从浏览器/PWA 迁移时，先导出未落盘的浏览器草稿，并关闭旧编辑窗口；桌面版会打开磁盘中已有的文稿，不读取其他浏览器的草稿。
 
 ## 固定文稿目录
 
@@ -27,9 +42,22 @@
 
 默认安装仅操作本机文稿目录。如果用户已开启 macOS 的“桌面与文稿文件夹”iCloud 同步，`~/Documents/EasyMD` 也可能由系统同步；跨设备上传和下载由 Apple 服务处理，本机写入成功不代表其他设备已收到。显式切换 iCloud 后，关闭云盘、退出 Apple 账户、同步暂停或占位文件尚未下载都可能使目录暂时不可访问，应用会保留浏览器草稿并提示错误。
 
-## 安装与启动
+## 从源码安装与启动
 
 使用 Node.js 22.15 或更新版本和 pnpm 10。
+
+普通用户可使用上方 DMG。以下命令面向源码开发；构建桌面安装包推荐 Node.js 24：
+
+```bash
+pnpm install --frozen-lockfile
+node node_modules/electron/install.js
+pnpm desktop:run                 # 本机运行独立 App
+pnpm desktop:package             # 生成两种芯片的 DMG 与 ZIP
+```
+
+打包、校验、GitHub 发布及后续签名公证配置见 [macOS 发布说明](./.github/MACOS_RELEASE.md)。桌面 App 使用独立回环端口 `17583`，文稿与偏好存储在本机；安装包保留项目、Electron 与 Chromium 的许可声明。
+
+以下为浏览器/PWA 本机服务的安装方式：
 
 ```bash
 pnpm install --frozen-lockfile

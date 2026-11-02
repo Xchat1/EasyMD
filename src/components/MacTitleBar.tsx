@@ -82,6 +82,7 @@ export const MacTitleBar: React.FC<MacTitleBarProps> = ({
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isInstalled, setIsInstalled] = useState<boolean>(() => {
     return (
+      navigator.userAgent.includes('EasyMDDesktop/') ||
       window.matchMedia('(display-mode: standalone)').matches ||
       (window.navigator as any).standalone === true
     );
